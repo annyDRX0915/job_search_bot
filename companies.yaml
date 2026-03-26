@@ -1,0 +1,25 @@
+greenhouse:
+  - anthropic
+  - stripe
+  - reddit
+  - discord
+  - scaleai
+  - brex
+  - flexport
+  - asana
+  - figma
+  - databricks
+  - instacart
+  - coinbase
+  - robinhood
+  - affirm
+  - chime
+  - dropbox
+  - intercom
+  - amplitude
+  - cockroachlabs
+  - algolia
+
+lever:
+  - plaid
+  - mistral

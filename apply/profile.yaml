@@ -1,0 +1,38 @@
+# Your personal info for job applications
+personal:
+  first_name: Anny 
+  last_name: Dai
+  email: anny.dai.edu@gmail.com
+  phone: +1-647-528-8139         # e.g. +1-647-555-1234
+  city: Aurora          # e.g. Toronto
+  province_state: Ontario # e.g. Ontario
+  country: Canada        # Canada or United States
+  linkedin_url: https://www.linkedin.com/in/anny-dai-drx/
+  github_url: https://github.com/annyDRX0915
+  portfolio_url:  # leave blank if none
+
+# Resume to use by default
+resume_path: resume/Resume_Agentic_AI/resume.pdf
+
+# Work authorization
+work_authorization:
+  canada: true       # are you authorized to work in Canada?
+  usa: false         # are you authorized to work in the USA?
+  requires_sponsorship: false
+
+# Common screening question answers
+answers:
+  years_of_experience: 2
+  highest_degree: Master's
+  field_of_study: Computer Science
+  willing_to_relocate: false
+  salary_expectation_usd: 100000
+  salary_expectation_cad: 70000
+  preferred_work_type: hybrid  # remote / hybrid / onsite
+
+# Cover letter — use {title} and {company} as placeholders
+cover_letter: |
+  I am excited to apply for the {title} position at {company}.
+  With my Master's degree and hands-on experience in machine learning and AI,
+  I am confident I can make a meaningful contribution to your team.
+  I look forward to the opportunity to discuss how my skills align with your needs.

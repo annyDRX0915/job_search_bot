@@ -1,0 +1,60 @@
+Anny Dai
+Aurora, ON, Canada	(+1)647-528-8139	 anny.dai.edu@gmail.com
+www.linkedin.com/in/anny-dai-drx	https://github.com/annyDRX0915   
+
+
+
+Education
+
+University of Toronto	September 2024 -  December 2025
+Master of Science in Applied Computing (GPA 4.0/4)	Toronto, ON
+Artificial Intelligence Focus	
+
+University of Toronto	September 2018 – April 2024
+Honors Bachelor of Science with High Distinction (GPA 3.94/4)	Toronto, ON
+Specialist in Computer Science, Major in Mathematics, Minor in Statistics	
+
+
+Experience
+
+Magna New Mobility	May 2025 – December 2025
+Data Science Intern 	Toronto, ON, Canada
+Built a scalable patch-based segmentation pipeline for high-resolution industrial images, splitting inputs into windows and aggregating predictions to support large-model inference at scale.
+Improved small-defect detection performance by +0.19 IoU, +0.30 Precision, and +0.22 Recall across defects through data augmentation, architectural tuning, and optimized stitching.
+Developed a hybrid CV and ML workflow for leather surface defects: binary segmentation → defect crop extraction → XGBoost multi-class severity classification, enabling interpretable and modular predictions.
+Designed and optimized Databricks ETL pipelines for large image datasets, including ingestion, preprocessing, metadata extraction, and distributed compute for model training and analytics.
+Containerized and deployed ML inference services using Docker and NVIDIA Triton Server, reducing deployment setup time and ensuring reproducible GPU-serving environments.
+Automated training, evaluation, and deployment workflows, combining quantitative metrics with technician feedback to drive continuous model improvement.
+
+Magna Electronics 	May 2022 - June 2023
+Software Engineer Intern 	Brampton, ON, Canada
+Developed internal KPI analysis tools using Python and NumPy with a GUI interface, streamlining automated evaluation workflows for engineering teams.
+Performed camera calibration (intrinsic and extrinsic parameters) to ensure accurate sensor alignment and measurement.
+Resolved bugs and added new functionality to C++/Python modules, improving system reliability for autonomous sensing applications.
+Built new ROS2 Foxy C++ features on Linux, contributing to sensor integration and autonomous software stacks.
+Ensured software quality through integration testing, code review, and GitHub workflow maintenance, reducing post-release issues.
+
+
+
+Academic Experience
+
+Vector-Based Reinforcement Learning 	June 2023 - August 2023
+Research assistant 	Toronto, ON, Canada
+Implemented ArUco and OpenCV-based 3D pose tracking for cube, goal, and tool-tip objects and integrated tracking signals into reinforcement learning environments.
+Supported development and evaluation of vector-based RL modules using Python and C++.
+Academic Cases/Projects
+
+MT-GPT: Interactive Museum Audio Guide | Language Model Prompting 	September 2024 - December 2024
+Developed an interactive, multilingual, and personalized museum audio guide using GPT models, focusing on improving engagement and satisfaction through Persona and CoT prompting techniques.
+Implemented advanced prompting strategies including Persona for adapting the narrative style to user preferences and CoT for enhancing logical reasoning in content generation.
+Evaluated the system using quantitative readability metrics and qualitative user surveys, demonstrating that combinations of Persona and CoT prompting significantly enhance narrative quality and user interaction.
+
+Artwork Restoration with Generative Image Inpainting | Python, PyTorch, git 	September 2024 - December 2024
+Benchmarked 3 inpainting models (CO-MOD-GAN, ICT, LaMa) fine-tuned on WikiArt, training on 20k paintings and evaluating on a 5k-image test set with 5 degradation mask types.
+Evaluated restoration quality using 3 metrics (MSE, MS-SSIM, FID); LaMa achieved best pixel/structure fidelity (MSE 0.01002, MS-SSIM 0.79205) while Co-Mod-GAN produced most realistic distribution (best FID 112.155).
+Conducted qualitative case studies across multiple artwork styles (landscape, still life, abstract, portrait), identifying key failure modes such as facial distortion, small-detail loss, and errors under full occlusion.
+
+INTR: Interpretable Transformer for Image Classification | Python, PyTorch, git	September 2024 - December 2024
+Evaluated INTR on 14 fine-grained image datasets (original 8 + 6 extended), conducting accuracy benchmarking and attention heatmap analysis.
+Compared INTR against ResNet-50 across all datasets, identifying up to +9.2% accuracy gain on Fish and up to −12% degradation on CUB due to background complexity.
+Generated and analyzed class-specific cross-attention visualizations, demonstrating INTR’s ability to localize discriminative regions for fine-grained classification.
