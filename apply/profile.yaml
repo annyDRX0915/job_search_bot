@@ -4,8 +4,10 @@ personal:
   last_name: Dai
   email: anny.dai.edu@gmail.com
   phone: +1-647-528-8139         # e.g. +1-647-555-1234
+  street_address: "23 Hodgkinson Cres"     # e.g. 123 Main St
   city: Aurora          # e.g. Toronto
   province_state: Ontario # e.g. Ontario
+  postal_code: "L4G 6K4"        # e.g. L4G 1A1
   country: Canada        # Canada or United States
   linkedin_url: https://www.linkedin.com/in/anny-dai-drx/
   github_url: https://github.com/annyDRX0915

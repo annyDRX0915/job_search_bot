@@ -4,6 +4,7 @@ Handles: Greenhouse, Lever, LinkedIn Easy Apply, generic fallback.
 Logs results to apply/applied_log.csv.
 """
 
+import argparse
 import csv
 import json
 import os
@@ -56,11 +57,16 @@ def load_jobs() -> list[dict]:
                 jobs.extend(csv.DictReader(f))
     return jobs
 
+def _norm_url(url: str) -> str:
+    return url.strip().rstrip("/").lower().split("?")[0]
+
 def load_applied_urls() -> set:
+    """Return normalized URLs of successfully applied jobs (status='applied')."""
     if not LOG_PATH.exists():
         return set()
     with open(LOG_PATH, newline="", encoding="utf-8") as f:
-        return {row["url"] for row in csv.DictReader(f) if row.get("url")}
+        return {_norm_url(row["url"]) for row in csv.DictReader(f)
+                if row.get("url") and row.get("status") == "applied"}
 
 def log_result(url, company, title, source, status, notes=""):
     write_header = not LOG_PATH.exists()
@@ -137,11 +143,10 @@ def is_greenhouse_page(page: Page) -> bool:
         return False
 
 def click_apply_or_prompt(page: Page) -> bool:
-    """Click the Apply button; if not found, ask the user to click it."""
-    clicked = try_click(page, APPLY_BTNS)
+    """Click the Apply button; if not found, continue silently (form may already be open)."""
+    clicked = try_click(page, APPLY_BTNS, timeout=300)
     if not clicked:
-        print("  ! Could not find Apply button — please click it manually in the browser.")
-        input("    Press Enter once the application form is open: ")
+        print("  ! Apply button not found — proceeding to fill form directly.")
     return clicked
 
 def multi_page_fill_loop(
@@ -175,12 +180,9 @@ def multi_page_fill_loop(
             print(f"  Waiting for page {page_num}…")
             time.sleep(2)
             frame = get_fill_target(page)
-            # Retry standard fields (resume upload / city may appear on later pages)
+            # Retry standard fields (address/resume may appear on later pages)
             fill_standard_fields(frame, profile, resume, cl)
             fill_country(frame, profile["personal"].get("country", "Canada"))
-            try_fill(frame, ["input[name='city']", "input[id*='city']",
-                              "input[aria-label*='City']", "input[placeholder*='City']"],
-                     profile["personal"].get("city", ""))
             handle_common_questions(frame, profile, job)
             print(f"  Page {page_num} filled.")
 
@@ -231,6 +233,50 @@ def fill_standard_fields(frame, profile: dict, resume: str, cl: str):
     if p.get("portfolio_url"):
         try_fill(frame, ["input[name='urls[Portfolio]']", "input[placeholder*='Portfolio']"],
                  p["portfolio_url"])
+    if p.get("street_address"):
+        try_fill(frame, [
+            "input[name='address']", "input[name*='street']", "input[id*='street']",
+            "input[autocomplete='street-address']", "input[placeholder*='Street']",
+            "input[placeholder*='Address']", "input[aria-label*='Address']",
+            "input[id*='address']", "input[name*='address']",
+        ], p["street_address"])
+    try_fill(frame, [
+        "input[name='city']", "input[id*='city']", "input[name*='city']",
+        "input[autocomplete='address-level2']",
+        "input[aria-label*='City']", "input[placeholder*='City']",
+    ], p.get("city", ""))
+    if p.get("postal_code"):
+        try_fill(frame, [
+            "input[name='zip']", "input[name*='zip']", "input[id*='zip']",
+            "input[name*='postal']", "input[id*='postal']",
+            "input[autocomplete='postal-code']",
+            "input[aria-label*='Postal']", "input[aria-label*='ZIP']",
+            "input[placeholder*='Postal']", "input[placeholder*='ZIP']",
+        ], p["postal_code"])
+    # Province/state — try select first, then text input
+    province = p.get("province_state", "")
+    if province:
+        try:
+            sel = frame.locator(
+                "select[name*='state'], select[name*='province'], select[id*='state'], "
+                "select[id*='province'], select[autocomplete='address-level1']"
+            ).first
+            if sel.count() > 0:
+                sel.wait_for(state="visible", timeout=2000)
+                opts = sel.evaluate("el => Array.from(el.options).map(o => ({v: o.value, t: o.text}))")
+                match = next((o["v"] for o in opts if province.lower() in o["t"].lower()
+                              or o["t"].lower() in province.lower()), None)
+                if match:
+                    sel.select_option(match)
+        except Exception:
+            pass
+        try_fill(frame, [
+            "input[name*='state']", "input[id*='state']",
+            "input[name*='province']", "input[id*='province']",
+            "input[autocomplete='address-level1']",
+            "input[aria-label*='State']", "input[aria-label*='Province']",
+            "input[placeholder*='State']", "input[placeholder*='Province']",
+        ], province)
 
 
 def fill_country(frame, country: str):
@@ -305,13 +351,23 @@ def _rule_answer(label: str, options: list[str], profile: dict) -> str | None:
     return None
 
 
+_USE_AI = True  # set to False via --no-ai flag
+
+
 def _ai_answers(unanswered: list[dict], profile: dict, job: dict) -> dict[str, str]:
     if not unanswered:
+        return {}
+    if not _USE_AI:
+        print("  ! AI disabled — skipping AI answers.")
         return {}
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("  ! OPENAI_API_KEY not set — skipping AI answers.")
+        print("    Check that your .env file has OPENAI_API_KEY=sk-...")
         return {}
+    print(f"  [AI] Sending {len(unanswered)} question(s) to OpenAI:")
+    for q in unanswered:
+        print(f"       • {q['label']!r}  type={q['type']}  options={q['options']}")
     try:
         p = profile["personal"]
         summary = (
@@ -331,17 +387,19 @@ def _ai_answers(unanswered: list[dict], profile: dict, job: dict) -> dict[str, s
             "Answer ONLY the questions below. If options are given, answer with one of those exact strings.\n"
             "Free-text answers should be concise (1-3 sentences) and draw on the applicant's real experience above.\n"
             "Reply ONLY with a JSON object {label: answer}.\n\n"
-            f"Questions:\n{json.dumps([{'label':q['label'],'type':q['type'],'options':q['options']} for q in unanswered], indent=2)}"
+            f"Questions:\n{json.dumps([{'label':' '.join(q['label'].split()),'type':q['type'],'options':q['options']} for q in unanswered], indent=2)}"
         )
         resp = OpenAI(api_key=api_key).chat.completions.create(
             model="gpt-4o-mini",
-            max_tokens=400,
+            max_tokens=1500,
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": prompt}],
         )
-        return json.loads(resp.choices[0].message.content)
+        result = json.loads(resp.choices[0].message.content)
+        print(f"  [AI] Response: {result}")
+        return result
     except Exception as e:
-        print(f"  ! AI answer failed: {e}")
+        print(f"  ! AI answer failed: {type(e).__name__}: {e}")
         return {}
 
 
@@ -391,12 +449,28 @@ def _apply_answer(frame, q: dict, answer: str):
     except Exception:
         pass
 
-    # Radio
+    # Radio group — match by group name attr or by scanning all radios for the right option
+    if qtype == "radio":
+        try:
+            name = q.get("name")
+            radios = (frame.locator(f"input[type='radio'][name='{name}']").all()
+                      if name else frame.locator("input[type='radio']").all())
+            for radio in radios:
+                lbl = radio.evaluate(_LABEL_JS).strip()
+                val = (radio.get_attribute("value") or "").strip()
+                if answer.lower() in lbl.lower() or answer.lower() in val.lower():
+                    radio.check()
+                    return
+        except Exception:
+            pass
+        return
+
+    # Radio fallback for non-radio qtype (legacy path)
     try:
         for radio in frame.locator("input[type='radio']").all():
             lbl = radio.evaluate(_LABEL_JS).lower()
             val = (radio.get_attribute("value") or "").lower()
-            if label.lower()[:20] in lbl and (answer.lower() in val or answer.lower() in lbl):
+            if label.lower()[:30] in lbl and (answer.lower() in val or answer.lower() in lbl):
                 radio.check()
                 return
     except Exception:
@@ -421,28 +495,104 @@ def handle_common_questions(frame, profile: dict, job: dict = None):
     try:
         questions = frame.evaluate("""() => {
             const results = [], seen = new Set();
-            document.querySelectorAll('.field, [data-field], .application-question, .custom-field, fieldset')
-            .forEach(c => {
+            const SKIP_TYPES = new Set(['hidden','submit','button','file','image','reset','checkbox']);
+            const SKIP_NAMES = new Set(['first_name','last_name','email','phone','name',
+                                        'resume','cover_letter','linkedin','github','website',
+                                        'city','zip','postal','address','state','province','country']);
+
+            function normLabel(t) {
+                return t.replace(/\\s+/g, ' ').replace(/[*\\u00a0]+/g, '').trim();
+            }
+            function isSkippedName(el) {
+                const n = (el.name || el.id || '').toLowerCase();
+                return Array.from(SKIP_NAMES).some(k => n.includes(k));
+            }
+            function classifyCtrl(ctrl) {
+                if (!ctrl) return null;
+                if (ctrl.tagName === 'SELECT') {
+                    if (ctrl.value) return null; // already answered
+                    const opts = Array.from(ctrl.options).map(o => o.text.trim())
+                        .filter(t => t && !/^(select|choose|--|please)/i.test(t));
+                    return {type: 'select', options: opts, id: ctrl.id || null, name: null};
+                }
+                if (ctrl.tagName === 'TEXTAREA') {
+                    if (ctrl.value) return null;
+                    return {type: 'textarea', options: [], id: ctrl.id || null, name: null};
+                }
+                if (ctrl.tagName === 'INPUT') {
+                    if (SKIP_TYPES.has(ctrl.type) || ctrl.value) return null;
+                    if (isSkippedName(ctrl)) return null;
+                    return {type: 'text', options: [], id: ctrl.id || null, name: null};
+                }
+                return null;
+            }
+
+            // ── Pass 1: label[for] → control ─────────────────────────────────
+            document.querySelectorAll('label[for]').forEach(lbl => {
+                const text = normLabel(lbl.innerText);
+                if (!text || seen.has(text)) return;
+                const ctrl = document.getElementById(lbl.htmlFor);
+                if (!ctrl) return;
+                if (isSkippedName(ctrl)) return;
+                const info = classifyCtrl(ctrl);
+                if (!info) return;
+                seen.add(text);
+                results.push({label: text, ...info});
+            });
+
+            // ── Pass 2: fieldset/legend → radio group ────────────────────────
+            document.querySelectorAll('fieldset').forEach(fs => {
+                const legend = fs.querySelector('legend');
+                if (!legend) return;
+                const text = normLabel(legend.innerText);
+                if (!text || seen.has(text)) return;
+                if (fs.querySelector('input[type="radio"]:checked')) return;
+                const radios = fs.querySelectorAll('input[type="radio"]');
+                if (!radios.length) return;
+                seen.add(text);
+                const opts = Array.from(radios).map(r => {
+                    const lbl = r.id ? document.querySelector('label[for="' + r.id + '"]') : null;
+                    if (lbl) return lbl.innerText.trim();
+                    const p = r.closest('label');
+                    return p ? normLabel(p.innerText) : r.value;
+                }).filter(Boolean);
+                results.push({label: text, type: 'radio', options: opts,
+                              id: null, name: radios[0].name || null});
+            });
+
+            // ── Pass 3: container fallback for unlabeled custom dropdowns ─────
+            const containers = [
+                '.custom-question', '.application-question', '[data-field]',
+                '.lever-question', '.application-field', '.s-form-field',
+                '[class*="custom_field"]', '[class*="customField"]'
+            ].join(', ');
+            document.querySelectorAll(containers).forEach(c => {
                 const lbl = c.querySelector('label, legend, .field-label');
                 if (!lbl) return;
-                const text = lbl.innerText.trim();
+                const text = normLabel(lbl.innerText);
                 if (!text || seen.has(text)) return;
-                seen.add(text);
-                const sel = c.querySelector('select');
-                if (sel) {
-                    const opts = Array.from(sel.options).map(o => o.text.trim()).filter(t => t && t.toLowerCase() !== 'select...');
-                    results.push({label: text, type: 'select', options: opts, id: sel.id || null});
+
+                // Custom combobox (no native select available)
+                const hasCombo = c.querySelector('[role="combobox"], [aria-haspopup="listbox"]');
+                const hasSel   = c.querySelector('select');
+                if (hasCombo && !hasSel) {
+                    seen.add(text);
+                    results.push({label: text, type: 'custom_select', options: [], id: null, name: null});
                     return;
                 }
-                if (c.querySelector('[role="combobox"], [aria-haspopup="listbox"]')) {
-                    results.push({label: text, type: 'custom_select', options: [], id: null});
-                    return;
+                // Radio group not inside a fieldset
+                const radios = c.querySelectorAll('input[type="radio"]');
+                if (radios.length && !c.querySelector('input[type="radio"]:checked')) {
+                    seen.add(text);
+                    const opts = Array.from(radios).map(r => {
+                        const el = r.id ? document.querySelector('label[for="' + r.id + '"]') : null;
+                        return el ? el.innerText.trim() : r.value;
+                    }).filter(Boolean);
+                    results.push({label: text, type: 'radio', options: opts,
+                                  id: null, name: radios[0].name || null});
                 }
-                const ta = c.querySelector('textarea');
-                if (ta && !ta.value) { results.push({label: text, type: 'textarea', options: [], id: ta.id || null}); return; }
-                const inp = c.querySelector('input[type="text"], input[type="number"], input:not([type])');
-                if (inp && !inp.value) results.push({label: text, type: 'text', options: [], id: inp.id || null});
             });
+
             return results;
         }""")
     except Exception as e:
@@ -458,12 +608,23 @@ def handle_common_questions(frame, profile: dict, job: dict = None):
         else:
             unanswered.append(q)
 
-    if unanswered:
-        print(f"  → Asking AI to answer {len(unanswered)} custom question(s)…")
-        ai = _ai_answers(unanswered, profile, job)
-        for q in unanswered:
-            if ai.get(q["label"]):
-                _apply_answer(frame, q, ai[q["label"]])
+    # Only send free-text questions to AI — selects/radios must be handled by rules
+    TEXT_TYPES = {"text", "textarea"}
+    ai_questions = [q for q in unanswered if q["type"] in TEXT_TYPES]
+    skipped = [q["label"] for q in unanswered if q["type"] not in TEXT_TYPES]
+    if skipped:
+        print(f"  → Skipping AI for {len(skipped)} select/radio question(s): {skipped}")
+
+    if ai_questions:
+        print(f"  → Asking AI to answer {len(ai_questions)} text question(s)…")
+        ai = _ai_answers(ai_questions, profile, job)
+        # Normalize AI response keys to handle whitespace/newline differences
+        ai_norm = {" ".join(k.split()): v for k, v in ai.items()}
+        for q in ai_questions:
+            norm_label = " ".join(q["label"].split())
+            answer = ai_norm.get(norm_label) or ai_norm.get(norm_label.rstrip("*").strip())
+            if answer:
+                _apply_answer(frame, q, answer)
                 time.sleep(0.2)
 
 
@@ -525,13 +686,10 @@ def apply_greenhouse(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         frame = get_fill_target(page)
         fill_standard_fields(frame, profile, resume, cl)
         fill_country(frame, profile["personal"].get("country", "Canada"))
-        try_fill(frame, ["input[name='city']", "input[id*='city']",
-                          "input[aria-label*='City']", "input[placeholder*='City']"],
-                 profile["personal"].get("city", ""))
         handle_common_questions(frame, profile, job)
         time.sleep(1)
         return multi_page_fill_loop(page, job, profile, resume, cl,
-                                    "name, email, phone, city, country, resume, cover_letter, linkedin, github")
+                                    "name, email, phone, address, city, province, postal, country, resume, cover_letter, linkedin, github")
     except Exception as e:
         return "failed", str(e)[:200]
 
@@ -561,18 +719,32 @@ def linkedin_login(page: Page):
     if not email or not password:
         raise RuntimeError("LinkedIn credentials missing from .env")
     page.goto("https://www.linkedin.com/login", wait_until="load", timeout=30000)
-    page.wait_for_selector("#username", timeout=10000)
+    page.wait_for_selector("#username", timeout=30000)
     page.fill("#username", email)
     page.fill("#password", password)
     page.click("button[type='submit']")
     time.sleep(5)
 
 
+_LI_EASY_APPLY = (
+    "button.jobs-apply-button, "
+    "button[aria-label*='Easy Apply'], "
+    "button:has-text('Easy Apply'), "
+    ".jobs-s-apply button, "
+    "[data-control-name='jobdetails_topcard_inapply'], "
+    "button.artdeco-button--primary:has-text('Apply')"
+)
+
+
 def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
     try:
         page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
-        btn = page.locator("button:has-text('Easy Apply'), .jobs-apply-button").first
+        # Wait for the apply button to appear rather than a blind sleep
+        try:
+            page.wait_for_selector(_LI_EASY_APPLY, timeout=8000)
+        except Exception:
+            pass
+        btn = page.locator(_LI_EASY_APPLY).first
         if btn.count() == 0:
             # No Easy Apply — follow the external "Apply" link instead
             ext = page.locator("a:has-text('Apply'), a.jobs-apply-button, [data-tracking-control-name*='apply']").first
@@ -582,7 +754,7 @@ def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
                     print("  → No Easy Apply, following external link.")
                     job = dict(job, url=href)
                     return apply_generic(page, job, profile)
-            print("  ! No Apply button found — please apply manually in the browser.")
+            print("  ! No Apply button found — proceeding to fill form directly.")
             resume = resolve_resume(profile, job.get("title", ""))
             cl = cover_letter_text(profile, job.get("title", ""), job.get("company", ""))
             return multi_page_fill_loop(page, job, profile, resume, cl)
@@ -593,12 +765,9 @@ def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         # Fill the Easy Apply modal — it's a multi-step sidebar
         fill_standard_fields(page, profile, resume, cl)
         fill_country(page, profile["personal"].get("country", "Canada"))
-        try_fill(page, ["input[name='city']", "input[id*='city']",
-                        "input[aria-label*='City']", "input[placeholder*='City']"],
-                 profile["personal"].get("city", ""))
         handle_common_questions(page, profile, job)
         return multi_page_fill_loop(page, job, profile, resume, cl,
-                                    "name, email, phone, city, resume, linkedin")
+                                    "name, email, phone, address, city, province, postal, resume, linkedin")
     except Exception as e:
         return "failed", str(e)[:200]
 
@@ -634,10 +803,18 @@ def apply_generic(page: Page, job: dict, profile: dict) -> tuple[str, str]:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    global _USE_AI
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-ai", action="store_true", help="Disable AI for custom questions")
+    args = parser.parse_args()
+    if args.no_ai:
+        _USE_AI = False
+        print("AI disabled — only rule-based answers will be used.")
+
     profile = load_profile()
     jobs = load_jobs()
     applied_urls = load_applied_urls()
-    pending = [j for j in jobs if j.get("url") and j["url"] not in applied_urls]
+    pending = [j for j in jobs if j.get("url") and _norm_url(j["url"]) not in applied_urls]
     print(f"Total: {len(jobs)} | Applied: {len(applied_urls)} | Pending: {len(pending)}")
     if not pending:
         print("Nothing to apply to.")
