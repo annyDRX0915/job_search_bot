@@ -113,15 +113,25 @@ def is_entry_level(title: str) -> bool:
     return not any(kw in lower for kw in TITLE_EXCLUDE)
 
 
-def is_entry_level_description(description: str) -> bool:
+def is_entry_level_description(description: str, title: str = "") -> bool:
     if not description:
-        return True  # no description scraped, give benefit of the doubt
+        # No description fetched — fall back to title-only check
+        # If title already passed is_entry_level(), allow it through
+        return True
     d = description.lower()
     if any(p in d for p in PHD_PATTERNS):
         return False
     for match in _YEARS_RE.finditer(d):
-        if int(match.group(1)) > 5:
+        if int(match.group(1)) >= 5:  # exclude 5+ years (was > 5, missed "5 years"/"5+ years")
             return False
+    # Catch senior-level language in description even if title looked fine
+    SENIOR_PHRASES = [
+        "5+ years", "6+ years", "7+ years", "8+ years",
+        "senior engineer", "senior developer", "senior scientist",
+        "lead engineer", "staff engineer", "principal engineer",
+    ]
+    if any(p in d for p in SENIOR_PHRASES):
+        return False
     return True
 
 
@@ -288,7 +298,7 @@ def main():
     df["description"] = descriptions
 
     before = len(df)
-    df = df[df["description"].apply(is_entry_level_description)].reset_index(drop=True)
+    df = df[df.apply(lambda r: is_entry_level_description(r["description"], r["title"]), axis=1)].reset_index(drop=True)
     print(f"Filtered to {len(df)} jobs after experience/PhD check (dropped {before - len(df)})")
 
     df.to_csv("linkedin_jobs.csv", index=False, encoding="utf-8-sig")
