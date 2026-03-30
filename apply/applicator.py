@@ -22,7 +22,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent.parent
 PROFILE_PATH = BASE_DIR / "apply" / "profile.yaml"
 LOG_PATH = BASE_DIR / "apply" / "applied_log.csv"
-JOBS_CSVS = [BASE_DIR / "jobs.csv", BASE_DIR / "linkedin_jobs.csv"]
+RANKED_CSV = BASE_DIR / "ranked_jobs.csv"
 
 def _read_past_exp() -> str:
     try:
@@ -50,12 +50,10 @@ def load_profile() -> dict:
         return yaml.safe_load(f)
 
 def load_jobs() -> list[dict]:
-    jobs = []
-    for path in JOBS_CSVS:
-        if path.exists():
-            with open(path, newline="", encoding="utf-8-sig") as f:
-                jobs.extend(csv.DictReader(f))
-    return jobs
+    if not RANKED_CSV.exists():
+        raise SystemExit(f"{RANKED_CSV} not found — run `python rank/ranker.py` first.")
+    with open(RANKED_CSV, newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
 
 def _norm_url(url: str) -> str:
     return url.strip().rstrip("/").lower().split("?")[0]

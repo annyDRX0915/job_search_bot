@@ -8,13 +8,16 @@ A job search bot with two crawlers and an auto-applicator:
 
 - `crawler/crawler.py` — Fetches jobs from **Greenhouse** and **Lever** public APIs. Outputs `jobs.csv`.
 - `crawler/crawler_linkedin.py` — Scrapes **LinkedIn** job search pages using Playwright. Outputs `linkedin_jobs.csv`.
-- `apply/applicator.py` — (planned) Auto-applies to jobs in both CSVs using Playwright.
+- `rank/ranker.py` — Scores and ranks all crawled jobs, outputs `ranked_jobs.csv` (top 40).
+- `apply/applicator.py` — Auto-applies to jobs in `ranked_jobs.csv` using Playwright.
 
-## Running the crawlers
+## Daily workflow
 
 ```bash
-.venv/bin/python crawler/crawler.py
-.venv/bin/python crawler/crawler_linkedin.py
+.venv/bin/python crawler/crawler.py          # fetch Greenhouse + Lever jobs → jobs.csv
+.venv/bin/python crawler/crawler_linkedin.py # scrape LinkedIn → linkedin_jobs.csv
+.venv/bin/python rank/ranker.py              # score + rank → ranked_jobs.csv (top 40)
+.venv/bin/python apply/applicator.py        # auto-apply in rank order
 ```
 
 `crawler.py` reads `companies.yaml` (Greenhouse board tokens + Lever handles) from the working directory.
@@ -60,10 +63,24 @@ LINKEDIN_EMAIL=...
 LINKEDIN_PASSWORD=...
 ```
 
-## Planned: Auto-applicator
+## Ranker (`rank/ranker.py`)
 
-`apply/profile.yaml` — user profile (name, email, phone, resume path, work auth, common Q&A answers)
-`apply/applicator.py` — reads `jobs.csv` + `linkedin_jobs.csv`, detects ATS type, and submits applications via Playwright.
+Merges `jobs.csv` + `linkedin_jobs.csv`, filters out already-applied URLs (from `apply/applied_log.csv`), dedupes by `company + title` (keeping Canada locations), drops ineligible locations, and scores each job 0–100:
+
+| Signal | Max pts | Logic |
+|---|---|---|
+| Title match | 35 | ML/AI engineer > data scientist > SWE |
+| Company tier | 25 | Tier 1 (Google/OpenAI/etc) > Tier 2 (Stripe/Shopify/etc) > other |
+| Location | 20 | Canada city/province > remote > US-only |
+| Recency | 15 | <6h > <12h > <24h > older |
+| Description keywords | 10 | LLM, RAG, PyTorch, agents, transformers, etc. |
+
+Outputs `ranked_jobs.csv` with top 40. Applicator reads this file in rank order.
+
+## Auto-applicator (`apply/applicator.py`)
+
+Reads `ranked_jobs.csv` (run ranker first), detects ATS type, and submits applications via Playwright.
+Skips any URL already in `apply/applied_log.csv`.
 
 ATS targets: Greenhouse, Lever, LinkedIn Easy Apply, generic fallback.
 
