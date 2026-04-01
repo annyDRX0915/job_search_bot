@@ -295,6 +295,20 @@ def fill_country(frame, country: str):
 
 # ── AI + rule-based question answering ───────────────────────────────────────
 
+# Labels that are page UI elements (nav, search bars, etc.), not application questions
+_JUNK_LABEL_FRAGMENTS = [
+    "search by title",
+    "describe the job you want",
+    "search jobs",
+    "job title, keywords",
+    "city, state, or zip",
+    "search for jobs",
+]
+
+def _is_junk_label(label: str) -> bool:
+    l = label.lower()
+    return any(frag in l for frag in _JUNK_LABEL_FRAGMENTS)
+
 _LABEL_JS = """(el => {
     const id = el.id;
     const explicit = id ? document.querySelector(`label[for='${id}']`) : null;
@@ -599,6 +613,8 @@ def handle_common_questions(frame, profile: dict, job: dict = None):
 
     unanswered = []
     for q in (questions or []):
+        if _is_junk_label(q["label"]):
+            continue
         answer = _rule_answer(q["label"], q["options"], profile)
         if answer is not None:
             _apply_answer(frame, q, answer)
@@ -737,9 +753,13 @@ _LI_EASY_APPLY = (
 def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
     try:
         page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
+        # Check for "No longer accepting applications" before doing anything else
+        closed = page.locator("text=No longer accepting applications").first
+        if closed.count() > 0:
+            return "skipped", "No longer accepting applications"
         # Wait for the apply button to appear rather than a blind sleep
         try:
-            page.wait_for_selector(_LI_EASY_APPLY, timeout=8000)
+            page.wait_for_selector(_LI_EASY_APPLY, timeout=3000)
         except Exception:
             pass
         btn = page.locator(_LI_EASY_APPLY).first
