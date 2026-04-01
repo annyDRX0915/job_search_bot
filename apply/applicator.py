@@ -742,12 +742,13 @@ def linkedin_login(page: Page):
 
 
 _LI_EASY_APPLY = (
-    "button.jobs-apply-button, "
     "button[aria-label*='Easy Apply'], "
     "button:has-text('Easy Apply'), "
+    "button.jobs-apply-button, "
     ".jobs-s-apply button, "
     "[data-control-name='jobdetails_topcard_inapply'], "
-    "button.artdeco-button--primary:has-text('Apply')"
+    "button.artdeco-button--primary:has-text('Apply'), "
+    "button:has-text('Apply')"  # broad fallback — buttons only, never <a> tags
 )
 
 
@@ -785,7 +786,7 @@ def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         btn = page.locator(_LI_EASY_APPLY).first
         if btn.count() == 0:
             # No Easy Apply — click the external Apply link and let LinkedIn's JS navigate
-            ext = page.locator("a:has-text('Apply'), a.jobs-apply-button, [data-tracking-control-name*='apply']").first
+            ext = page.locator("a:has-text('Apply'), a.jobs-apply-button").first
             if ext.count() > 0:
                 print("  → No Easy Apply, clicking external Apply link.")
                 opens_new_tab = ext.get_attribute("target") in ("_blank", "_new")
