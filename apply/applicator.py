@@ -752,7 +752,11 @@ _LI_EASY_APPLY = (
 
 
 def _clean_linkedin_url(url: str) -> str:
-    """Strip tracking params and normalize ca./uk./etc. subdomains to www."""
+    """Use canonical LinkedIn job URL (numeric ID only) to avoid slug/subdomain redirects."""
+    match = re.search(r'/jobs/view/\D*?(\d+)', url)
+    if match:
+        return f"https://www.linkedin.com/jobs/view/{match.group(1)}/"
+    # Fallback: strip params and normalize subdomain
     url = url.split("?")[0].rstrip("/")
     url = re.sub(r"https://[a-z]{2}\.linkedin\.com", "https://www.linkedin.com", url)
     return url
@@ -760,30 +764,39 @@ def _clean_linkedin_url(url: str) -> str:
 
 def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
     try:
-        page.goto(_clean_linkedin_url(job["url"]), wait_until="domcontentloaded", timeout=30000)
+        clean_url = _clean_linkedin_url(job["url"])
+        page.goto(clean_url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)  # let LinkedIn SPA finish any client-side routing
+
+        # Verify we're still on the job page (LinkedIn SPA can redirect us away)
+        if "/jobs/view/" not in page.url:
+            print(f"  ! Redirected away from job page → {page.url[:80]}")
+            return "skipped", f"LinkedIn redirected away: {page.url[:120]}"
+
         # Check for "No longer accepting applications" before doing anything else
         closed = page.locator("text=No longer accepting applications").first
         if closed.count() > 0:
             return "skipped", "No longer accepting applications"
         # Wait for the apply button to appear rather than a blind sleep
         try:
-            page.wait_for_selector(_LI_EASY_APPLY, timeout=3000)
+            page.wait_for_selector(_LI_EASY_APPLY, timeout=5000)
         except Exception:
             pass
         btn = page.locator(_LI_EASY_APPLY).first
         if btn.count() == 0:
-            # No Easy Apply — follow the external "Apply" link instead
+            # No Easy Apply — click the external Apply link and let LinkedIn's JS navigate
             ext = page.locator("a:has-text('Apply'), a.jobs-apply-button, [data-tracking-control-name*='apply']").first
             if ext.count() > 0:
-                href = ext.get_attribute("href")
-                if href:
-                    print("  → No Easy Apply, following external link.")
-                    job = dict(job, url=href)
-                    return apply_generic(page, job, profile)
-            print("  ! No Apply button found — proceeding to fill form directly.")
-            resume = resolve_resume(profile, job.get("title", ""))
-            cl = cover_letter_text(profile, job.get("title", ""), job.get("company", ""))
-            return multi_page_fill_loop(page, job, profile, resume, cl)
+                print("  → No Easy Apply, clicking external Apply link.")
+                try:
+                    with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
+                        ext.click()
+                except Exception:
+                    pass  # some redirects don't trigger a full navigation event
+                time.sleep(2)
+                print(f"  → Landed on: {page.url[:80]}")
+                return apply_generic(page, job, profile, already_navigated=True)
+            return "skipped", "No Apply button found"
         btn.click()
         time.sleep(2)
         resume = resolve_resume(profile, job.get("title", ""))
@@ -798,11 +811,12 @@ def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         return "failed", str(e)[:200]
 
 
-def apply_generic(page: Page, job: dict, profile: dict) -> tuple[str, str]:
+def apply_generic(page: Page, job: dict, profile: dict, already_navigated: bool = False) -> tuple[str, str]:
     resume = resolve_resume(profile, job.get("title", ""))
     cl = cover_letter_text(profile, job.get("title", ""), job.get("company", ""))
     try:
-        page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
+        if not already_navigated:
+            page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
         time.sleep(2)
         if is_greenhouse_page(page):
             print("  → Detected Greenhouse form, switching handler.")
