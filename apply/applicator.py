@@ -750,9 +750,16 @@ _LI_EASY_APPLY = (
 )
 
 
+def _clean_linkedin_url(url: str) -> str:
+    """Strip tracking params and normalize ca./uk./etc. subdomains to www."""
+    url = url.split("?")[0].rstrip("/")
+    url = re.sub(r"https://[a-z]{2}\.linkedin\.com", "https://www.linkedin.com", url)
+    return url
+
+
 def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
     try:
-        page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
+        page.goto(_clean_linkedin_url(job["url"]), wait_until="domcontentloaded", timeout=30000)
         # Check for "No longer accepting applications" before doing anything else
         closed = page.locator("text=No longer accepting applications").first
         if closed.count() > 0:
