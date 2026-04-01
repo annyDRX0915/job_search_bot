@@ -788,14 +788,26 @@ def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
             ext = page.locator("a:has-text('Apply'), a.jobs-apply-button, [data-tracking-control-name*='apply']").first
             if ext.count() > 0:
                 print("  → No Easy Apply, clicking external Apply link.")
-                try:
-                    with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
+                opens_new_tab = ext.get_attribute("target") in ("_blank", "_new")
+                if opens_new_tab:
+                    with page.context.expect_page(timeout=15000) as new_page_info:
                         ext.click()
-                except Exception:
-                    pass  # some redirects don't trigger a full navigation event
-                time.sleep(2)
-                print(f"  → Landed on: {page.url[:80]}")
-                return apply_generic(page, job, profile, already_navigated=True)
+                    new_page = new_page_info.value
+                    new_page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    time.sleep(2)
+                    print(f"  → Opened new tab: {new_page.url[:80]}")
+                    result = apply_generic(new_page, job, profile, already_navigated=True)
+                    new_page.close()
+                    return result
+                else:
+                    try:
+                        with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
+                            ext.click()
+                    except Exception:
+                        pass  # some redirects don't trigger a full navigation event
+                    time.sleep(2)
+                    print(f"  → Landed on: {page.url[:80]}")
+                    return apply_generic(page, job, profile, already_navigated=True)
             return "skipped", "No Apply button found"
         btn.click()
         time.sleep(2)
