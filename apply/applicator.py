@@ -8,6 +8,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import time
 import yaml
 from datetime import datetime
