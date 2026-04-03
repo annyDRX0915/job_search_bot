@@ -40,7 +40,6 @@ COMPANY_BLOCKLIST = {
     "taskus",
     "clickworker",
     "alignerr",
-    "jobright",
 }
 
 TITLE_KEYWORDS = [

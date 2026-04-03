@@ -21,7 +21,6 @@ COMPANY_BLOCKLIST = {
     "great value hiring",
     "turing",           # gig-style "remote engineer" platform
     "alignerr",
-    "jobright",
 }
 
 # ── locations that indicate ineligible work jurisdiction ─────────────────────
