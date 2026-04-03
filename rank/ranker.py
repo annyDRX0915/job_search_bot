@@ -44,8 +44,8 @@ TITLE_SCORES = [
     (30, [r"applied (scientist|ml|ai)", r"research engineer", r"mlops"]),
     (25, [r"data scientist", r"data science", r"nlp engineer", r"computer vision"]),
     (20, [r"data engineer", r"analytics engineer"]),
-    (15, [r"software engineer", r"backend engineer", r"swe\b", r"full[- ]?stack"]),
-    (10, [r"software developer", r"frontend engineer", r"platform engineer"]),
+    (5, [r"software engineer", r"backend engineer", r"swe\b", r"full[- ]?stack"]),
+    (0, [r"software developer", r"frontend engineer", r"platform engineer"]),
 ]
 
 def score_title(title: str) -> int:
