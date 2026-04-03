@@ -23,6 +23,7 @@ COMPANY_BLOCKLIST = {
     "taskus",
     "clickworker",
     "alignerr",
+    "jobright",
 }
 
 LOCATION_KEYWORDS = [
