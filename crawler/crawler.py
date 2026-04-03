@@ -22,6 +22,7 @@ COMPANY_BLOCKLIST = {
     "telus international",
     "taskus",
     "clickworker",
+    "alignerr",
 }
 
 LOCATION_KEYWORDS = [

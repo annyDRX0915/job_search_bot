@@ -20,6 +20,7 @@ TOP_N           = 40
 COMPANY_BLOCKLIST = {
     "great value hiring",
     "turing",           # gig-style "remote engineer" platform
+    "alignerr",
 }
 
 # ── locations that indicate ineligible work jurisdiction ─────────────────────
