@@ -742,6 +742,7 @@ def linkedin_login(page: Page):
 
 
 _LI_EASY_APPLY = (
+    "a[aria-label*='Easy Apply'], "
     "button[aria-label*='Easy Apply'], "
     "button:has-text('Easy Apply'), "
     "button.jobs-apply-button, "
