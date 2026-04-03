@@ -70,6 +70,7 @@ TITLE_EXCLUDE = [
     "senior",
     "sr.",
     " sr ",
+    "sr ",
     "staff",
     "principal",
     "director",
