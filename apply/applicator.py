@@ -342,6 +342,8 @@ def _rule_answer(label: str, options: list[str], profile: dict) -> str | None:
         return _pick(options, "No") or "No"
     if any(k in l for k in ["worked here", "worked for", "previously employed", "former employee"]):
         return _pick(options, "No") or "No"
+    if any(k in l for k in ["convicted", "criminal", "pardon", "offense", "felony"]):
+        return _pick(options, "No") or "No"
     if any(k in l for k in ["how did you hear", "how did you find", "where did you hear", "referral source"]):
         return _pick(options, "linkedin") or _pick(options, "online") or (options[0] if options else "LinkedIn")
     if "year" in l and "experience" in l and not options:
