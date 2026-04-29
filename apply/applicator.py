@@ -59,13 +59,20 @@ def load_jobs() -> list[dict]:
 def _norm_url(url: str) -> str:
     return url.strip().rstrip("/").lower().split("?")[0]
 
-def load_applied_urls() -> set:
-    """Return normalized URLs of successfully applied jobs (status='applied')."""
+def load_applied() -> tuple[set, set]:
+    """Return (applied_urls, applied_company_titles) from the log."""
     if not LOG_PATH.exists():
-        return set()
+        return set(), set()
+    urls, company_titles = set(), set()
     with open(LOG_PATH, newline="", encoding="utf-8") as f:
-        return {_norm_url(row["url"]) for row in csv.DictReader(f)
-                if row.get("url") and row.get("status") == "applied"}
+        for row in csv.DictReader(f):
+            if row.get("url"):
+                urls.add(_norm_url(row["url"]))
+            c = (row.get("company") or "").strip().lower()
+            t = (row.get("title") or "").strip().lower()
+            if c and t:
+                company_titles.add((c, t))
+    return urls, company_titles
 
 def log_result(url, company, title, source, status, notes=""):
     write_header = not LOG_PATH.exists()
@@ -737,8 +744,13 @@ def linkedin_login(page: Page):
         raise RuntimeError("LinkedIn credentials missing from .env")
     page.goto("https://www.linkedin.com/login", wait_until="load", timeout=30000)
     page.wait_for_selector("#username", timeout=30000)
-    page.fill("#username", email)
-    page.fill("#password", password)
+    time.sleep(1)
+    page.click("#username")
+    page.type("#username", email, delay=60)
+    page.wait_for_selector("#password", timeout=10000)
+    page.click("#password")
+    page.type("#password", password, delay=60)
+    time.sleep(0.5)
     page.click("button[type='submit']")
     time.sleep(5)
 
@@ -766,7 +778,7 @@ def _clean_linkedin_url(url: str) -> str:
     return url
 
 
-def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
+def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = True) -> tuple[str, str]:
     try:
         clean_url = _clean_linkedin_url(job["url"])
         page.goto(clean_url, wait_until="domcontentloaded", timeout=30000)
@@ -793,16 +805,28 @@ def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
             if ext.count() > 0:
                 print("  → No Easy Apply, clicking external Apply link.")
                 opens_new_tab = ext.get_attribute("target") in ("_blank", "_new")
-                if opens_new_tab:
+                if opens_new_tab and _allow_new_tab:
                     with page.context.expect_page(timeout=15000) as new_page_info:
                         ext.click()
                     new_page = new_page_info.value
                     new_page.wait_for_load_state("domcontentloaded", timeout=15000)
                     time.sleep(2)
                     print(f"  → Opened new tab: {new_page.url[:80]}")
-                    result = apply_generic(new_page, job, profile, already_navigated=True)
+                    if "linkedin.com/jobs/view/" in new_page.url:
+                        result = apply_linkedin(new_page, job, profile, _allow_new_tab=False)
+                    else:
+                        result = apply_generic(new_page, job, profile, already_navigated=True)
                     new_page.close()
                     return result
+                elif opens_new_tab:
+                    # Secondary tab context — goto href directly to avoid spawning another tab
+                    href = ext.get_attribute("href") or ""
+                    if not href:
+                        return "skipped", "External apply link has no href"
+                    print(f"  → Navigating in-place to: {href[:80]}")
+                    page.goto(href, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(2)
+                    return apply_generic(page, job, profile, already_navigated=True)
                 else:
                     try:
                         with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
@@ -817,7 +841,6 @@ def apply_linkedin(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         time.sleep(2)
         resume = resolve_resume(profile, job.get("title", ""))
         cl = cover_letter_text(profile, job.get("title", ""), job.get("company", ""))
-        # Fill the Easy Apply modal — it's a multi-step sidebar
         fill_standard_fields(page, profile, resume, cl)
         fill_country(page, profile["personal"].get("country", "Canada"))
         handle_common_questions(page, profile, job)
@@ -833,7 +856,9 @@ def apply_generic(page: Page, job: dict, profile: dict, already_navigated: bool 
     try:
         if not already_navigated:
             page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
+            time.sleep(2)
+        if "linkedin.com/jobs/view/" in page.url:
+            return apply_linkedin(page, job, profile, _allow_new_tab=False)
         if is_greenhouse_page(page):
             print("  → Detected Greenhouse form, switching handler.")
             return apply_greenhouse(page, job, profile)
@@ -843,6 +868,8 @@ def apply_generic(page: Page, job: dict, profile: dict, already_navigated: bool 
             if is_greenhouse_page(page):
                 print("  → Detected Greenhouse form after Apply click, switching handler.")
                 return apply_greenhouse(page, job, profile)
+            if "linkedin.com" in page.url:
+                return apply_linkedin(page, job, profile, _allow_new_tab=False)
             wait_for_form(page, ["input[type='email']", "input[name*='email']",
                                    "input[name*='first']", "form", "input[type='file']"], timeout=5000)
         time.sleep(1)
@@ -869,8 +896,16 @@ def main():
 
     profile = load_profile()
     jobs = load_jobs()
-    applied_urls = load_applied_urls()
-    pending = [j for j in jobs if j.get("url") and _norm_url(j["url"]) not in applied_urls]
+    applied_urls, applied_company_titles = load_applied()
+
+    def already_applied(j: dict) -> bool:
+        if j.get("url") and _norm_url(j["url"]) in applied_urls:
+            return True
+        c = (j.get("company") or "").strip().lower()
+        t = (j.get("title") or "").strip().lower()
+        return bool(c and t and (c, t) in applied_company_titles)
+
+    pending = [j for j in jobs if j.get("url") and not already_applied(j)]
     print(f"Total: {len(jobs)} | Applied: {len(applied_urls)} | Pending: {len(pending)}")
     if not pending:
         print("Nothing to apply to.")
@@ -901,7 +936,8 @@ def main():
             else:
                 status, notes = apply_generic(page, job, profile)
             print(f"  → {status}" + (f": {notes}" if notes else ""))
-            log_result(url, company, title, source, status, notes)
+            if status != "failed":
+                log_result(url, company, title, source, status, notes)
             counts[status] = counts.get(status, 0) + 1
             time.sleep(2)
 

@@ -1,8 +1,8 @@
-PWD /Users/annydai/Desktop/job_search/job_search_bot/resume/Resume_Software_Engineer
+PWD /Users/annydai/Desktop/job_search/job_search_bot/resume/Resume_Data_Science
 INPUT /usr/local/texlive/2025basic/texmf.cnf
 INPUT /usr/local/texlive/2025basic/texmf-dist/web2c/texmf.cnf
 INPUT /usr/local/texlive/2025basic/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT /Users/annydai/Desktop/job_search/job_search_bot/resume/Resume_Software_Engineer/resume.tex
+INPUT resume.tex
 OUTPUT resume.log
 INPUT /usr/local/texlive/2025basic/texmf-dist/tex/latex/base/article.cls
 INPUT /usr/local/texlive/2025basic/texmf-dist/tex/latex/base/article.cls
@@ -277,3 +277,4 @@ INPUT ./resume.out
 INPUT /usr/local/texlive/2025basic/texmf-dist/fonts/type1/adobe/sourcesanspro/SourceSansPro-It.pfb
 INPUT /usr/local/texlive/2025basic/texmf-dist/fonts/type1/adobe/sourcesanspro/SourceSansPro-Regular.pfb
 INPUT /usr/local/texlive/2025basic/texmf-dist/fonts/type1/adobe/sourcesanspro/SourceSansPro-Semibold.pfb
+INPUT /usr/local/texlive/2025basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb

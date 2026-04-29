@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (TeX Live 2025) (preloaded format=pdflatex 2026.2.19)  9 APR 2026 20:58
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (TeX Live 2025) (preloaded format=pdflatex 2026.2.19)  22 APR 2026 19:54
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -720,8 +720,9 @@ LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/sb/n' aliased to
 LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/semibold/n' will be
 (Font)              scaled to size 10.0pt on input line 2.
 
-Underfull \hbox (badness 5893) in paragraph at lines 8--8
-[]\T1/SourceSansPro-TLF/semibold/n/10 Data Sys-tems & Ex-per-i-
+Underfull \hbox (badness 2443) in paragraph at lines 6--7
+[]\T1/SourceSansPro-TLF/regular/n/10 PyTorch, scikit-learn, XG-Boost, Fea-ture 
+En-gi-neer-ing, Model De-ploy-ment & Mon-i-tor-ing, AI Agents,
  []
 
 )
@@ -769,32 +770,37 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `\hfill' on input line 16.
 
-)
 LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/m/n' aliased to
-(Font)              `T1/SourceSansPro-TLF/regular/n' on input line 69.
+(Font)              `T1/SourceSansPro-TLF/regular/n' on input line 24.
 LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/regular/n' will be
-(Font)              scaled to size 24.88pt on input line 69.
+(Font)              scaled to size 24.88pt on input line 24.
 LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/sb/n' aliased to
-(Font)              `T1/SourceSansPro-TLF/semibold/n' on input line 69.
+(Font)              `T1/SourceSansPro-TLF/semibold/n' on input line 24.
 LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/semibold/n' will be
-(Font)              scaled to size 24.88pt on input line 69.
+(Font)              scaled to size 24.88pt on input line 24.
 LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/m/n' aliased to
-(Font)              `T1/SourceSansPro-TLF/regular/n' on input line 69.
+(Font)              `T1/SourceSansPro-TLF/regular/n' on input line 24.
 LaTeX Font Info:    Font shape `T1/SourceSansPro-TLF/regular/n' will be
-(Font)              scaled to size 14.4pt on input line 69.
- [1{/usr/local/texlive/2025basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{
-/usr/local/texlive/2025basic/texmf-dist/fonts/enc/dvips/sourcesanspro/a_emkxm5.
-enc}
+(Font)              scaled to size 14.4pt on input line 24.
+[1{/usr/local/texlive/2025basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/
+usr/local/texlive/2025basic/texmf-dist/fonts/enc/dvips/sourcesanspro/a_emkxm5.e
+nc}
 
 {/usr/local/texlive/2025basic/texmf-dist/fonts/enc/dvips/sourcesanspro/a_4jropk
 .enc}{/usr/local/texlive/2025basic/texmf-dist/fonts/enc/dvips/sourcesanspro/a_5
-ponh6.enc}] (./resume.aux)
+ponh6.enc}])
+pdfTeX warning (ext4): destination with the same identifier (name{page.}) has b
+een already used, duplicate ignored
+<to be read again> 
+                   \relax 
+l.69 \end{document}
+                    [2] (./resume.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
 Package rerunfilecheck Info: File `resume.out' has not changed.
-(rerunfilecheck)             Checksum: 516312B343E282F251D991AF9DDC2108;2855.
+(rerunfilecheck)             Checksum: C955CEBA4D2999772407E05E8F04A608;2873.
  ) 
 Here is how much of TeX's memory you used:
  14727 strings out of 468657
@@ -803,16 +809,16 @@ Here is how much of TeX's memory you used:
  43201 multiletter control sequences out of 15000+600000
  714614 words of font info for 59 fonts, out of 8000000 for 9000
  430 hyphenation exceptions out of 8191
- 140i,11n,135p,739b,516s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 140i,11n,135p,786b,650s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/local/texlive/2025basic/texmf-dist/fonts/type1/adobe/sourcesanspro/Sour
 ceSansPro-It.pfb></usr/local/texlive/2025basic/texmf-dist/fonts/type1/adobe/sou
 rcesanspro/SourceSansPro-Regular.pfb></usr/local/texlive/2025basic/texmf-dist/f
 onts/type1/adobe/sourcesanspro/SourceSansPro-Semibold.pfb></usr/local/texlive/2
 025basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb>
-Output written on resume.pdf (1 page, 188862 bytes).
+Output written on resume.pdf (2 pages, 189790 bytes).
 PDF statistics:
- 80 PDF objects out of 1000 (max. 8388607)
- 66 compressed objects within 1 object stream
+ 83 PDF objects out of 1000 (max. 8388607)
+ 68 compressed objects within 1 object stream
  10 named destinations out of 1000 (max. 500000)
  65 words of extra memory for PDF output out of 10000 (max. 10000000)
 

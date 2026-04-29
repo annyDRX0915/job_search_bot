@@ -14,7 +14,7 @@ JOBS_CSV        = "jobs.csv"
 LINKEDIN_CSV    = "linkedin_jobs.csv"
 APPLIED_LOG     = "apply/applied_log.csv"
 OUTPUT_CSV      = "ranked_jobs.csv"
-TOP_N           = 40
+TOP_N           = 50
 
 # ── ranker-level blocklist (spam recruiters, gig platforms) ───────────────────
 COMPANY_BLOCKLIST = {
@@ -87,13 +87,13 @@ CANADA_TERMS = [
 
 def score_location(location: str) -> int:
     if not location:
-        return 8
+        return 3
     loc = location.lower()
     if any(t in loc for t in CANADA_TERMS):
-        return 20
+        return 30
     if "remote" in loc:
-        return 15  # remote but no explicit Canada — might still be fine
-    return 5  # US-only or unclear
+        return 5   # remote with no Canada mention — likely US-based
+    return 0  # US-only
 
 # ── recency scoring ───────────────────────────────────────────────────────────
 def score_recency(posted_at) -> int:
@@ -185,12 +185,21 @@ def load_jobs() -> pd.DataFrame:
     return df
 
 
-def load_applied_urls() -> set:
+def _norm_url(url: str) -> str:
+    return str(url).strip().rstrip("/").lower().split("?")[0]
+
+def load_applied() -> tuple[set, set]:
+    """Return (applied_urls, applied_company_titles) from the log."""
     try:
         log = pd.read_csv(APPLIED_LOG)
-        return set(log["url"].dropna().tolist())
+        urls = {_norm_url(u) for u in log["url"].dropna()}
+        company_titles = set()
+        if "company" in log.columns and "title" in log.columns:
+            ct = log.dropna(subset=["company", "title"])
+            company_titles = set(zip(ct["company"].str.strip().str.lower(), ct["title"].str.strip().str.lower()))
+        return urls, company_titles
     except FileNotFoundError:
-        return set()
+        return set(), set()
 
 
 def score_jobs(df: pd.DataFrame) -> pd.DataFrame:
@@ -214,9 +223,18 @@ def main():
     jobs = load_jobs()
     print(f"Loaded {len(jobs)} total jobs")
 
-    applied = load_applied_urls()
-    jobs = jobs[~jobs["url"].isin(applied)]
-    print(f"After removing {len(applied)} already-applied: {len(jobs)} remaining")
+    applied_urls, applied_ct = load_applied()
+
+    def already_applied(row) -> bool:
+        if _norm_url(row["url"]) in applied_urls:
+            return True
+        c = (row.get("company") or "").strip().lower()
+        t = (row.get("title") or "").strip().lower()
+        return bool(c and t and (c, t) in applied_ct)
+
+    before = len(jobs)
+    jobs = jobs[~jobs.apply(already_applied, axis=1)].reset_index(drop=True)
+    print(f"After removing already-applied: {len(jobs)} remaining (dropped {before - len(jobs)})")
 
     jobs = score_jobs(jobs)
     jobs = jobs.sort_values("score", ascending=False).reset_index(drop=True)

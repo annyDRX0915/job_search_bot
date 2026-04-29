@@ -1,9 +1,14 @@
+import os
 import re
+import tempfile
 import time
 from urllib.parse import quote_plus
 
 import pandas as pd
+from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
+
+load_dotenv()
 
 KEYWORDS = [
     "machine learning engineer",
@@ -21,6 +26,7 @@ KEYWORDS = [
 
 LOCATIONS = [
     "Canada",
+    # "United States",
 ]
 
 # r86400 = 24h, r604800 = 7d, r2592000 = 30d
@@ -40,6 +46,7 @@ COMPANY_BLOCKLIST = {
     "taskus",
     "clickworker",
     "alignerr",
+    "Jobs Ai",
 }
 
 TITLE_KEYWORDS = [
@@ -81,8 +88,9 @@ TITLE_EXCLUDE = [
     "head of",
     "lead ",
     " lead",
-    "intern",
-    "internship",
+    # "intern",
+    # "internship",
+    "student",
     "co-op",
     "coop",
     "distinguished",
@@ -137,18 +145,54 @@ def is_entry_level_description(description: str, title: str = "") -> bool:
     return True
 
 
+_CLOSED_PHRASES = [
+    "no longer accepting applications",
+    "this job is no longer available",
+    "page not found",
+    "job has expired",
+    "join linkedin",
+    "agree & join",
+]
+
+_CLOSED_RE = re.compile("|".join(re.escape(p) for p in _CLOSED_PHRASES), re.IGNORECASE)
+
+
+def _first_element_text(page, selectors: list) -> str:
+    for sel in selectors:
+        el = page.locator(sel).first
+        if el.count() > 0:
+            return el.inner_text()
+    return ""
+
+
 def fetch_description(page, url: str) -> str:
+    """Returns description text, or None if the job is closed/expired."""
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(2)
-        for selector in [
+
+        if _CLOSED_RE.search(page.content()):
+            return None
+
+        text = _first_element_text(page, [
+            # logged-in selectors
+            "div.jobs-description-content__text",
+            "div.jobs-description__content",
+            "article.jobs-description__container",
+            # logged-out / public selectors
             "div.description__text",
             "div.show-more-less-html__markup",
             "div#job-details",
-        ]:
-            el = page.locator(selector).first
-            if el.count() > 0:
-                return el.inner_text()
+        ])
+        criteria = _first_element_text(page, [
+            "div.job-criteria-list",
+            "section.job-criteria",
+            "ul.description__job-criteria-list",
+            "div[data-testid='job-posting-criteria']",
+        ])
+        if not text:
+            text = _first_element_text(page, ["div.core-rail", "main"])
+        return "\n".join(filter(None, [text, criteria]))
     except Exception:
         pass
     return ""
@@ -164,55 +208,119 @@ def build_linkedin_search_url(keyword: str, location: str, start: int = 0) -> st
     )
 
 
-def scroll_page(page, rounds: int = 4, pause: float = 1.2):
-    """Scroll the job results list to trigger lazy loading."""
-    for _ in range(rounds):
+def scroll_page(page, rounds: int = 8, pause: float = 1.5):
+    """Scroll the job list panel to trigger lazy loading."""
+    # Find the scrollable parent of the first job card via JS (most robust)
+    scrolled_via_js = page.evaluate("""() => {
+        const card = document.querySelector('div.job-card-container, div.base-card');
+        if (!card) return false;
+        let el = card.parentElement;
+        while (el && el !== document.body) {
+            if (el.scrollHeight > el.clientHeight + 10) {
+                el.scrollBy(0, 99999);
+                return true;
+            }
+            el = el.parentElement;
+        }
+        return false;
+    }""")
+
+    if not scrolled_via_js:
+        # Fallback: move mouse over left panel (~350px from left) then wheel-scroll
         try:
-            # Try scrolling the job results list panel specifically
-            list_panel = page.locator("ul.jobs-search__results-list, div.jobs-search-results-list").first
-            if list_panel.count() > 0:
-                list_panel.evaluate("el => el.scrollBy(0, 3000)")
-            else:
-                page.keyboard.press("End")
-            time.sleep(pause)
+            page.mouse.move(350, 400)
         except Exception:
-            break
+            pass
+        for _ in range(rounds):
+            try:
+                page.mouse.wheel(0, 3000)
+                time.sleep(pause)
+            except Exception:
+                break
+        return
+
+    # After JS scroll-to-bottom, wait for lazy cards to load
+    time.sleep(3)
+
+
+def _locator_text(el, selectors: list) -> str:
+    for sel in selectors:
+        loc = el.locator(sel)
+        if loc.count() > 0:
+            return loc.first.inner_text().strip()
+    return ""
+
+
+def _locator_attr(el, selectors: list, attr: str) -> str:
+    for sel in selectors:
+        loc = el.locator(sel)
+        if loc.count() > 0:
+            return loc.first.get_attribute(attr) or ""
+    return ""
 
 
 def extract_jobs_from_page(page, keyword: str, location: str):
     jobs = []
 
-    cards = page.locator("div.base-card").all()
+    # Logged-in DOM uses div.job-card-container; logged-out uses div.base-card
+    cards = page.locator("div.job-card-container").all()
+    logged_in = bool(cards)
     if not cards:
-        cards = page.locator("li").all()
+        cards = page.locator("div.base-card").all()
 
     for card in cards:
         try:
-            title = None
-            company = None
-            job_location = None
-            url = None
-            posted = None
+            if logged_in:
+                raw_title = _locator_text(card, [
+                    "a.job-card-list__title--link",
+                    "span.job-card-list__title--link",
+                ])
+                # LinkedIn appends "\n<title> with verification" — keep only first line
+                title = raw_title.split("\n")[0].strip()
 
-            title_locator = card.locator("h3")
-            if title_locator.count() > 0:
-                title = title_locator.first.inner_text().strip()
+                company = _locator_text(card, [
+                    "div.artdeco-entity-lockup__subtitle span",
+                    "span.job-card-container__primary-description",
+                    "div.job-card-container__primary-description",
+                ])
 
-            company_locator = card.locator("h4")
-            if company_locator.count() > 0:
-                company = company_locator.first.inner_text().strip()
+                job_location = _locator_text(card, [
+                    "li.job-card-container__metadata-item",
+                    "div.job-card-container__metadata-wrapper li",
+                    "div.artdeco-entity-lockup__caption",
+                    "span.job-card-container__bullet",
+                    "span[class*='bullet']",
+                ])
+                # Fallback: parse location from card text (line after company name)
+                if not job_location and company:
+                    lines = [l.strip() for l in card.inner_text().split("\n") if l.strip()]
+                    try:
+                        idx = next(i for i, l in enumerate(lines) if company in l)
+                        if idx + 1 < len(lines):
+                            candidate = lines[idx + 1]
+                            # Rough check: location lines contain commas or known keywords
+                            if any(k in candidate for k in [",", "Remote", "Canada", "United States", "Ontario", "BC", "Toronto", "Vancouver", "Montreal"]):
+                                job_location = candidate
+                    except StopIteration:
+                        pass
 
-            loc_locator = card.locator(".job-search-card__location")
-            if loc_locator.count() > 0:
-                job_location = loc_locator.first.inner_text().strip()
+                url = _locator_attr(card, [
+                    "a.job-card-list__title--link",
+                    "a.job-card-container__link",
+                ], "href")
+                posted = _locator_attr(card, ["time"], "datetime") or _locator_text(card, ["time"])
+            else:
+                title = _locator_text(card, ["h3"])
+                company = _locator_text(card, ["h4"])
+                job_location = _locator_text(card, [".job-search-card__location"])
+                url = _locator_attr(card, ["a"], "href")
+                posted = _locator_attr(card, ["time"], "datetime") or _locator_text(card, ["time"])
 
-            link_locator = card.locator("a")
-            if link_locator.count() > 0:
-                url = link_locator.first.get_attribute("href")
-
-            time_locator = card.locator("time")
-            if time_locator.count() > 0:
-                posted = time_locator.first.get_attribute("datetime") or time_locator.first.inner_text().strip()
+            # Normalise URL: strip query params, ensure absolute
+            if url:
+                url = url.split("?")[0]
+                if url.startswith("/"):
+                    url = "https://www.linkedin.com" + url
 
             if title:
                 jobs.append({
@@ -239,16 +347,49 @@ def dedupe_jobs(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def linkedin_login(page) -> bool:
+    """Log in to LinkedIn. Returns True on success."""
+    email = os.getenv("LINKEDIN_EMAIL")
+    password = os.getenv("LINKEDIN_PASSWORD")
+    if not email or not password:
+        print("No LinkedIn credentials found in .env — skipping login.")
+        return False
+
+    print("Logging in to LinkedIn...")
+    page.goto("https://www.linkedin.com/login", wait_until="networkidle", timeout=60000)
+    page.wait_for_selector("input#username", timeout=30000)
+    page.click("input#username")
+    page.fill("input#username", "")
+    page.type("input#username", email, delay=50)
+    page.click("input#password")
+    page.fill("input#password", "")
+    page.type("input#password", password, delay=50)
+    page.click("button[type='submit']")
+    page.wait_for_url(re.compile(r"linkedin\.com/(feed|jobs|checkpoint)"), timeout=30000)
+
+    if "checkpoint" in page.url:
+        print("LinkedIn security checkpoint detected — complete it manually in the browser, then press Enter.")
+        input()
+
+    print("Logged in.")
+    return True
+
+
 def main():
     all_jobs = []
+    state_file = tempfile.mktemp(suffix=".json")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
+        context = browser.new_context()
+        page = context.new_page()
+
+        linkedin_login(page)
+        context.storage_state(path=state_file)
 
         for keyword in KEYWORDS:
             for location in LOCATIONS:
-                for start in [0]:
+                for start in [0, 25, 50]:
                     url = build_linkedin_search_url(keyword, location, start)
                     print(f"Fetching: {url}")
                     try:
@@ -258,11 +399,12 @@ def main():
                         jobs = extract_jobs_from_page(page, keyword, location)
                         print(f"  got {len(jobs)} jobs")
                         all_jobs.extend(jobs)
-                        time.sleep(3)
+                        time.sleep(4)
                     except Exception as e:
                         print(f"  failed: {e}")
                         continue
 
+        context.storage_state(path=state_file)
         browser.close()
 
     if not all_jobs:
@@ -284,11 +426,12 @@ def main():
     df = df[df["title"].apply(is_entry_level)].reset_index(drop=True)
     print(f"Filtered to {len(df)} entry-level jobs by title (dropped {before - len(df)})")
 
-    # Fetch descriptions and filter by experience/PhD requirements
+    # Fetch descriptions using saved login session
     print(f"Fetching descriptions for {len(df)} jobs to check experience requirements...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        context = browser.new_context(storage_state=state_file)
+        page = context.new_page()
         descriptions = []
         for i, row in df.iterrows():
             desc = fetch_description(page, row["url"]) if row.get("url") else ""
@@ -297,7 +440,16 @@ def main():
                 print(f"  {i + 1}/{len(df)} descriptions fetched")
         browser.close()
 
+    try:
+        os.remove(state_file)
+    except OSError:
+        pass
+
     df["description"] = descriptions
+
+    before = len(df)
+    df = df[df["description"].notna() & ~df["description"].str.contains(_CLOSED_RE.pattern, case=False, na=False, regex=True)].reset_index(drop=True)
+    print(f"Filtered to {len(df)} jobs after removing closed/expired/login-wall (dropped {before - len(df)})")
 
     before = len(df)
     df = df[df.apply(lambda r: is_entry_level_description(r["description"], r["title"]), axis=1)].reset_index(drop=True)

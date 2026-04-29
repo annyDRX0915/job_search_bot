@@ -27,7 +27,7 @@ COMPANY_BLOCKLIST = {
 
 LOCATION_KEYWORDS = [
     "canada",
-    "remote",  # include remote since they're often open to CA
+    "remote",  # include remote since they're often open to CA/US
     # Canadian cities/provinces
     "toronto",
     "vancouver",
@@ -38,6 +38,25 @@ LOCATION_KEYWORDS = [
     "british columbia",
     "alberta",
     "quebec",
+    # USA
+    "united states",
+    "usa",
+    "u.s.",
+    "new york",
+    "san francisco",
+    "seattle",
+    "boston",
+    "chicago",
+    "los angeles",
+    "austin",
+    "denver",
+    "atlanta",
+    "california",
+    "washington",
+    "new york",
+    "texas",
+    "massachusetts",
+    "illinois",
 ]
 
 
@@ -273,7 +292,7 @@ def main():
 
     before = len(df)
     df = df[df["location"].apply(is_in_region)].reset_index(drop=True)
-    print(f"Filtered to {len(df)} jobs in Canada (dropped {before - len(df)})")
+    print(f"Filtered to {len(df)} jobs in Canada/USA (dropped {before - len(df)})")
 
     before = len(df)
     df = df[df["posted_at"].apply(is_within_24h)].reset_index(drop=True)
