@@ -60,17 +60,22 @@ def write_sheet(tab: str, df: pd.DataFrame) -> None:
 
 
 def append_rows(tab: str, rows: list[dict]) -> None:
-    """Append rows to a tab without clearing it. Creates the tab + header if needed."""
+    """Append rows to a tab, aligning values to the existing header order."""
     if not rows:
         return
     sh = _client()
     try:
         ws = sh.worksheet(tab)
-        if not ws.get_all_values():
-            ws.append_row(list(rows[0].keys()))
+        existing = ws.get_all_values()
+        if existing:
+            headers = existing[0]
+        else:
+            headers = list(rows[0].keys())
+            ws.append_row(headers)
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=tab, rows=1000, cols=40)
-        ws.append_row(list(rows[0].keys()))
+        headers = list(rows[0].keys())
+        ws.append_row(headers)
 
     for row in rows:
-        ws.append_row(list(row.values()))
+        ws.append_row([str(row.get(h, "")) for h in headers])
