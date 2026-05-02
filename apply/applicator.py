@@ -747,22 +747,37 @@ def _is_bot_blocked(page: Page) -> bool:
         return False
 
 
-def apply_manual(url: str, job: dict) -> tuple[str, str]:
-    """Open URL in the system browser; prompt the user to apply, then log the result."""
-    import webbrowser
-    print(f"\n  Opening in your browser: {url[:100]}")
-    webbrowser.open(url)
-    print(f"  → Apply manually for {job.get('company','?')} — {job.get('title','?')}")
-    print("  Press Enter when applied | s = skip (won't retry) | q = quit: ", end="", flush=True)
+def apply_manual(page: Page, url: str, job: dict, profile: dict = None) -> tuple[str, str]:
+    """
+    CDP mode: navigate to URL in real Chrome, pre-fill standard fields, let user review + submit.
+    If profile is given, fills name/email/phone/resume/etc. and enters multi_page_fill_loop.
+    """
+    print(f"\n  → Manual: {url[:100]}")
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)
+    except Exception as e:
+        print(f"  ! Navigation error: {e}")
+
+    if profile:
+        resume = resolve_resume(profile, job.get("title", ""))
+        cl = cover_letter_text(profile, job.get("title", ""), job.get("company", ""))
+        frame = get_fill_target(page)
+        fill_standard_fields(frame, profile, resume, cl)
+        fill_country(frame, profile["personal"].get("country", "Canada"))
+        handle_common_questions(frame, profile, job)
+        time.sleep(1)
+        return multi_page_fill_loop(page, job, profile, resume, cl, "pre-filled standard fields")
+
+    print(f"  → {job.get('company','?')} — {job.get('title','?')}")
+    print("  Press Enter when applied | s = skip | q = quit: ", end="", flush=True)
     try:
         choice = input().strip().lower()
     except (EOFError, KeyboardInterrupt):
         choice = "q"
     if choice == "q":
         raise SystemExit("User quit.")
-    if choice == "s":
-        return "skipped", "skipped by user"
-    return "applied", "manually applied via browser"
+    return ("skipped", "skipped by user") if choice == "s" else ("applied", "manually applied via browser")
 
 def resolve_resume(profile: dict, job_title: str) -> str:
     title = (job_title or "").lower()
@@ -800,7 +815,7 @@ def apply_greenhouse(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         time.sleep(2)
         if _is_bot_blocked(page):
             print("  ! Bot/CAPTCHA block detected on Greenhouse page.")
-            return apply_manual(url, job)
+            return apply_manual(page, url, job, profile)
         clicked = click_apply_or_prompt(page)
         if clicked:
             wait_for_form(page, ["#first_name", "input[name='first_name']",
@@ -829,7 +844,7 @@ def apply_lever(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         time.sleep(1)
         if _is_bot_blocked(page):
             print("  ! Bot/CAPTCHA block detected on Lever page.")
-            return apply_manual(url, job)
+            return apply_manual(page, url, job, profile)
         fill_standard_fields(page, profile, resume, cl)
         handle_common_questions(page, profile, job)
         time.sleep(1)
@@ -983,8 +998,8 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                 href = ext.get_attribute("href") or ""
                 ext_ats = detect_ats(href) if href else "unknown"
                 if ext_ats in _MANUAL_ATS:
-                    print(f"  → External Apply goes to {ext_ats} (manual-only). Opening browser.")
-                    return apply_manual(href, job)
+                    print(f"  → External Apply goes to {ext_ats} (manual-only). Opening in browser.")
+                    return apply_manual(page, href, job, profile)
 
                 print("  → No Easy Apply, clicking external Apply link.")
                 opens_new_tab = ext.get_attribute("target") in ("_blank", "_new")
@@ -1002,7 +1017,7 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                     if _is_bot_blocked(new_page):
                         ext_url = new_page.url
                         new_page.close()
-                        return apply_manual(ext_url or href, job)
+                        return apply_manual(page, ext_url or href, job, profile)
                     if "linkedin.com/jobs/view/" in new_page.url:
                         result = apply_linkedin(new_page, job, profile, _allow_new_tab=False)
                     else:
@@ -1018,7 +1033,7 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                     if "linkedin.com" in page.url and "/jobs/view/" not in page.url:
                         return "skipped", f"External apply redirected back to LinkedIn ({page.url[:80]})"
                     if _is_bot_blocked(page):
-                        return apply_manual(page.url or href, job)
+                        return apply_manual(page, page.url or href, job, profile)
                     return apply_generic(page, job, profile, already_navigated=True)
                 else:
                     try:
@@ -1031,7 +1046,7 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                     if "linkedin.com" in page.url and "/jobs/view/" not in page.url:
                         return "skipped", f"External apply redirected back to LinkedIn ({page.url[:80]})"
                     if _is_bot_blocked(page):
-                        return apply_manual(page.url, job)
+                        return apply_manual(page, page.url, job, profile)
                     return apply_generic(page, job, profile, already_navigated=True)
             return "skipped", "No Apply button found"
         btn.click()
@@ -1056,7 +1071,7 @@ def apply_generic(page: Page, job: dict, profile: dict, already_navigated: bool 
             time.sleep(2)
         if _is_bot_blocked(page):
             print("  ! Bot/CAPTCHA block detected.")
-            return apply_manual(page.url or job["url"], job)
+            return apply_manual(page, page.url or job["url"], job, profile)
         if "linkedin.com/jobs/view/" in page.url:
             return apply_linkedin(page, job, profile, _allow_new_tab=False)
         if is_greenhouse_page(page):
@@ -1085,10 +1100,27 @@ def apply_generic(page: Page, job: dict, profile: dict, already_navigated: bool 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _cdp_instructions(cdp_url: str):
+    print(f"\n{'='*60}")
+    print(f"CDP connection failed at {cdp_url}")
+    print("Launch Chrome with remote debugging before running the applicator:\n")
+    print("  Mac:")
+    print("  /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\")
+    print("    --remote-debugging-port=9222 --no-first-run --no-default-browser-check\n")
+    print("  Add this alias to ~/.zshrc for convenience:")
+    print("  alias chrome-debug='/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222'\n")
+    print("Keep that terminal open, then re-run the applicator.")
+    print("Use --no-cdp to fall back to a fresh browser (requires LinkedIn login).")
+    print(f"{'='*60}\n")
+
+
 def main():
     global _USE_AI
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-ai", action="store_true", help="Disable AI for custom questions")
+    parser.add_argument("--no-cdp", action="store_true", help="Launch a new browser instead of connecting via CDP")
+    parser.add_argument("--cdp-url", default="http://localhost:9222", metavar="URL",
+                        help="Chrome DevTools Protocol endpoint (default: http://localhost:9222)")
     args = parser.parse_args()
     if args.no_ai:
         _USE_AI = False
@@ -1115,40 +1147,55 @@ def main():
 
     counts = {}
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
-        page = browser.new_context().new_page()
+        cdp_mode = not args.no_cdp
+        if cdp_mode:
+            try:
+                browser = pw.chromium.connect_over_cdp(args.cdp_url)
+                contexts = browser.contexts
+                context = contexts[0] if contexts else browser.new_context()
+                page = context.new_page()
+                print(f"Connected to Chrome via CDP at {args.cdp_url}")
+            except Exception as e:
+                _cdp_instructions(args.cdp_url)
+                raise SystemExit(f"CDP connection failed: {e}")
+        else:
+            browser = pw.chromium.launch(headless=False)
+            context = browser.new_context()
+            page = context.new_page()
+            try:
+                linkedin_login(page)
+                print("LinkedIn login successful.")
+            except Exception as e:
+                print(f"LinkedIn login failed: {e}")
+
         try:
-            linkedin_login(page)
-            print("LinkedIn login successful.")
-        except Exception as e:
-            print(f"LinkedIn login failed: {e}")
-
-        for i, job in enumerate(pending):
-            url, company, title, source = job.get("url",""), job.get("company",""), job.get("title",""), job.get("source","")
-            location = job.get("location", "")
-            ats = detect_ats(url)
-            print(f"[{i+1}/{len(pending)}] {company} — {title} ({ats})")
-            if ats in _MANUAL_ATS:
-                # Login-required or anti-bot ATS — open in real browser, don't attempt auto-fill
-                status, notes = apply_manual(url, job)
-            elif ats == "greenhouse":
-                status, notes = apply_greenhouse(page, job, profile)
-            elif ats == "lever":
-                status, notes = apply_lever(page, job, profile)
-            elif ats == "linkedin":
-                status, notes = apply_linkedin(page, job, profile)
-            elif ats == "ashby":
-                # Ashby forms are Greenhouse-compatible
-                status, notes = apply_greenhouse(page, job, profile)
-            else:
-                status, notes = apply_generic(page, job, profile)
-            print(f"  → {status}" + (f": {notes}" if notes else ""))
-            if status != "failed":
-                log_result(url, company, title, source, status, notes, location)
-            counts[status] = counts.get(status, 0) + 1
-            time.sleep(2)
-
-        browser.close()
+            for i, job in enumerate(pending):
+                url, company, title, source = job.get("url",""), job.get("company",""), job.get("title",""), job.get("source","")
+                location = job.get("location", "")
+                ats = detect_ats(url)
+                print(f"[{i+1}/{len(pending)}] {company} — {title} ({ats})")
+                if ats in _MANUAL_ATS:
+                    # Navigate in real Chrome (user already logged in via CDP), pre-fill what we can
+                    status, notes = apply_manual(page, url, job, profile)
+                elif ats == "greenhouse":
+                    status, notes = apply_greenhouse(page, job, profile)
+                elif ats == "lever":
+                    status, notes = apply_lever(page, job, profile)
+                elif ats == "linkedin":
+                    status, notes = apply_linkedin(page, job, profile)
+                elif ats == "ashby":
+                    status, notes = apply_greenhouse(page, job, profile)
+                else:
+                    status, notes = apply_generic(page, job, profile)
+                print(f"  → {status}" + (f": {notes}" if notes else ""))
+                if status != "failed":
+                    log_result(url, company, title, source, status, notes, location)
+                counts[status] = counts.get(status, 0) + 1
+                time.sleep(2)
+        finally:
+            page.close()
+            if not cdp_mode:
+                browser.close()
 
     print(f"\nDone. Applied: {counts.get('applied',0)} | Skipped: {counts.get('skipped',0)} | Failed: {counts.get('failed',0)}")
     print(f"Log: {LOG_PATH}")

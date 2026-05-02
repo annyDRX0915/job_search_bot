@@ -143,3 +143,30 @@ _Fill in after completion_
 - [ ] Discord digest looks good (top 10 jobs, clean formatting)
 - [ ] Important email summaries are useful
 - [ ] CSV fallback still works locally without `SPREADSHEET_ID` set
+
+---
+
+## Phase 7 — Chrome Extension (idea)
+
+A lightweight Chrome extension that sits alongside the applicator:
+
+**Core idea**: When the user navigates to a job application page, the extension detects the ATS and pre-fills fields using profile data — no Playwright needed.
+
+### How it works
+- Extension background script reads `profile.yaml` (or a JSON copy of it) from a local HTTP server the bot spins up
+- Content script detects ATS type (Greenhouse, Lever, Workday, etc.) and injects pre-filled values
+- User reviews the pre-filled form, clicks Next, and submits normally
+- On submit, extension POSTs the result (company, title, url, status) back to the local server → logged to `applied_log`
+
+### Components
+- [ ] `extension/manifest.json` — MV3 manifest, permissions: `storage`, `activeTab`, host permissions for ATS domains
+- [ ] `extension/background.js` — reads profile from local server, listens for tab events
+- [ ] `extension/content.js` — detects ATS, fills form fields, logs results
+- [ ] `extension/popup.html` + `popup.js` — shows profile status, pending jobs count, toggle on/off
+- [ ] `scripts/profile_server.py` — tiny Flask/http.server that serves profile.yaml as JSON and accepts apply logs
+
+### Advantages over Playwright
+- Works with any ATS (user's real session, no bot detection)
+- No browser launch needed — just browse normally
+- User is always in control — extension only pre-fills, never auto-submits
+- Works alongside CDP applicator (complementary, not a replacement)
