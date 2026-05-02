@@ -1,20 +1,34 @@
 # Job Search Bot
 
-Automated job crawler, ranker, and applicator. Crawls Greenhouse, Lever, and LinkedIn daily, ranks jobs by fit, and auto-applies via Playwright.
+Automated job crawler, AI ranker, and auto-applicator. Crawls Greenhouse, Lever, LinkedIn, and email job alerts daily, ranks jobs with GPT-4o-mini, and auto-applies via Playwright. All state lives in Google Sheets.
 
 ## Setup
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install requests pandas pyyaml playwright python-dotenv openai
+.venv/bin/pip install requests pandas pyyaml playwright python-dotenv openai \
+    google-api-python-client google-auth-oauthlib gspread google-auth beautifulsoup4
 .venv/bin/playwright install chromium
 ```
 
-Create `.env`:
+### Environment variables (`.env`)
+
 ```
+# LinkedIn scraper
 LINKEDIN_EMAIL=...
 LINKEDIN_PASSWORD=...
-OPENAI_API_KEY=...   # optional, for AI-assisted form filling
+
+# OpenAI (AI ranking + applicator form filling)
+OPENAI_API_KEY=...
+
+# Google Sheets — all state stored here
+SPREADSHEET_ID=...
+GOOGLE_SERVICE_ACCOUNT_JSON_PATH=/path/to/service-account-key.json
+
+# Gmail crawler (email job alerts)
+GMAIL_CLIENT_ID=...
+GMAIL_CLIENT_SECRET=...
+GMAIL_REFRESH_TOKEN=...   # generate once with: .venv/bin/python scripts/gmail_auth.py
 ```
 
 Edit `apply/profile.yaml` with your personal info, work authorization, and resume path.
@@ -22,31 +36,39 @@ Edit `apply/profile.yaml` with your personal info, work authorization, and resum
 ## Daily workflow
 
 ```bash
-.venv/bin/python crawler/crawler.py          # Greenhouse + Lever → jobs.csv
-.venv/bin/python crawler/crawler_linkedin.py # LinkedIn → linkedin_jobs.csv
-.venv/bin/python rank/ranker.py              # score + rank → ranked_jobs.csv (top 40)
-.venv/bin/python apply/applicator.py        # auto-apply in rank order
+# Runs locally — writes to Google Sheets
+.venv/bin/python crawler/crawler.py          # Greenhouse + Lever → Sheets:jobs
+.venv/bin/python crawler/crawler_linkedin.py # LinkedIn scrape → Sheets:linkedin_jobs
+.venv/bin/python crawler/crawler_email.py    # Gmail job alerts → Sheets:email_jobs
+.venv/bin/python rank/ranker.py              # AI rank → Sheets:ranked_jobs (top 40)
+.venv/bin/python apply/applicator.py        # auto-apply in rank order (interactive)
 ```
+
+`crawler.py` and `crawler_email.py` also run automatically every day via GitHub Actions (9 am UTC). `crawler_linkedin.py` and `apply/applicator.py` are local-only (require a real browser session).
 
 ## How it works
 
 ### Crawlers
 
-**`crawler/crawler.py`** — calls public Greenhouse and Lever JSON APIs (no auth needed). Reads `companies.yaml` for the list of companies to check.
+**`crawler/crawler.py`** — calls public Greenhouse and Lever JSON APIs (no auth needed). Reads `companies.yaml` for the list of companies.
 
-**`crawler/crawler_linkedin.py`** — uses Playwright to scrape LinkedIn job search pages.
+**`crawler/crawler_linkedin.py`** — Playwright scrape of LinkedIn job search pages. Requires `LINKEDIN_EMAIL` / `LINKEDIN_PASSWORD`.
 
-Both crawlers apply the same filters before saving:
-- Title must match ML/AI/SWE/data roles
-- Location must be Canada or remote (USA included as fallback)
-- Entry-level only (no senior, staff, principal, director, manager, VP, lead, intern)
-- No 6+ years experience or PhD requirements in the description
-- Posted within last 24h
-- Company not in blocklist (Mercor, DataAnnotation, Outlier, Appen, etc.)
+**`crawler/crawler_email.py`** — fetches LinkedIn, Indeed, and Glassdoor job alert emails from Gmail (last 24h), parses job listings, fetches full descriptions, and filters them. Supports:
+- `jobalerts-noreply@linkedin.com` — LinkedIn job alerts
+- `donotreply@jobalert.indeed.com` — Indeed job alert digests
+- `donotreply@match.indeed.com` — Indeed single job match emails
+- `noreply@glassdoor.com` — Glassdoor job alerts
+
+All three crawlers apply the same filters:
+- Title must match ML / AI / SWE / data roles
+- Entry-level only — no senior, staff, principal, director, manager, VP, lead
+- No 5+ years experience or PhD requirements (checked in description when available)
+- Company not in blocklist (Mercor, DataAnnotation, Outlier, Appen, Scale AI, etc.)
 
 ### Ranker (`rank/ranker.py`)
 
-Merges both CSVs, removes already-applied jobs, dedupes by `company + title`, and scores each job:
+Merges all three job sheets, removes already-applied jobs, dedupes by `job_key` (MD5 of title + company + location), and scores each job:
 
 | Signal | Max pts | Logic |
 |---|---|---|
@@ -56,20 +78,30 @@ Merges both CSVs, removes already-applied jobs, dedupes by `company + title`, an
 | Recency | 15 | <6h > <12h > <24h > older |
 | Description keywords | 10 | LLM, RAG, PyTorch, agents, transformers, etc. |
 
-Outputs `ranked_jobs.csv` with top 40. Add companies to `COMPANY_BLOCKLIST` or locations to `INELIGIBLE_LOCATION_TERMS` in the ranker to filter more aggressively.
+Top 50 rule-based results are then re-ranked by **GPT-4o-mini**, which considers your applied/skipped history to surface better matches. Outputs top 40 to `Sheets:ranked_jobs`.
 
 ### Applicator (`apply/applicator.py`)
 
-Reads `ranked_jobs.csv` in rank order and auto-applies via Playwright. Detects ATS type (Greenhouse, Lever, LinkedIn Easy Apply, or generic fallback). Logs every attempt to `apply/applied_log.csv` — already-applied URLs are skipped on future runs.
+Reads `Sheets:ranked_jobs` in rank order and auto-applies via Playwright. Detects ATS type (Greenhouse, Lever, LinkedIn Easy Apply, or generic fallback). Logs every attempt to `Sheets:applied_log` — already-applied jobs are skipped on future runs.
+
+## Google Sheets tabs
+
+| Tab | Written by | Read by |
+|---|---|---|
+| `jobs` | `crawler.py` | `ranker.py` |
+| `linkedin_jobs` | `crawler_linkedin.py` | `ranker.py` |
+| `email_jobs` | `crawler_email.py` | `ranker.py` |
+| `ranked_jobs` | `ranker.py` | `applicator.py` |
+| `applied_log` | `applicator.py` | `ranker.py`, `applicator.py` |
+
+All scripts fall back to local CSVs if `SPREADSHEET_ID` is not set.
 
 ## Files
 
 ```
-companies.yaml          # Greenhouse tokens + Lever handles to crawl
-apply/profile.yaml      # your info, work auth, resume path, Q&A answers
-apply/applied_log.csv   # auto-generated log of all application attempts
-jobs.csv                # crawler.py output
-linkedin_jobs.csv       # crawler_linkedin.py output
-ranked_jobs.csv         # ranker output (top 40, apply these)
-resume/                 # resume PDFs (Agentic AI, Data Science, Modeling)
+companies.yaml             # Greenhouse tokens + Lever handles to crawl
+apply/profile.yaml         # your info, work auth, resume path, Q&A answers
+scripts/gmail_auth.py      # one-time Gmail OAuth2 setup → prints GMAIL_REFRESH_TOKEN
+resume/                    # resume PDFs (Agentic AI, Data Science, Modeling)
+utils/gsheets.py           # Google Sheets helper (read_sheet / write_sheet / append_rows)
 ```

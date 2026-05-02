@@ -32,7 +32,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 
 ### Google Sheets
 - [x] Create a new Google Spreadsheet (can be blank)
-- [x] Share it with the service account email above (Editor access)
+- [x] Share it with the service account email above (Editor accesspush)
 - [x] Copy the Spreadsheet ID from the URL:
       `https://docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit`
 
