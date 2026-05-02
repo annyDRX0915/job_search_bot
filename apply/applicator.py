@@ -6,13 +6,21 @@ Logs results to apply/applied_log.csv.
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
+import sys
 import time
 import yaml
 from datetime import datetime
 from pathlib import Path
+
+
+def _make_job_key(title: str, company: str, location: str) -> str:
+    def _n(s): return re.sub(r'[^a-z0-9]', '', (s or '').lower().strip())
+    raw = f"{_n(title)}|{_n(company)}|{_n(location)}"
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -21,6 +29,10 @@ from playwright.sync_api import sync_playwright, Page
 load_dotenv()
 
 BASE_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(BASE_DIR))
+_USE_SHEETS = bool(os.getenv("SPREADSHEET_ID"))
+if _USE_SHEETS:
+    from utils.gsheets import read_sheet, append_rows as _sheets_append
 PROFILE_PATH = BASE_DIR / "apply" / "profile.yaml"
 LOG_PATH = BASE_DIR / "apply" / "applied_log.csv"
 RANKED_CSV = BASE_DIR / "ranked_jobs.csv"
@@ -32,7 +44,7 @@ def _read_past_exp() -> str:
         return ""
 
 PAST_EXPERIENCE = _read_past_exp()
-LOG_FIELDS = ["url", "company", "title", "source", "status", "timestamp", "notes"]
+LOG_FIELDS = ["job_key", "url", "company", "title", "source", "status", "timestamp", "notes"]
 
 APPLY_BTNS = [
     "a.btn-apply", "a[href*='#app']",
@@ -51,6 +63,12 @@ def load_profile() -> dict:
         return yaml.safe_load(f)
 
 def load_jobs() -> list[dict]:
+    if _USE_SHEETS:
+        import pandas as pd
+        df = read_sheet("ranked_jobs")
+        if df.empty:
+            raise SystemExit("Sheets:ranked_jobs is empty — run ranker.py first.")
+        return df.to_dict(orient="records")
     if not RANKED_CSV.exists():
         raise SystemExit(f"{RANKED_CSV} not found — run `python rank/ranker.py` first.")
     with open(RANKED_CSV, newline="", encoding="utf-8-sig") as f:
@@ -59,30 +77,43 @@ def load_jobs() -> list[dict]:
 def _norm_url(url: str) -> str:
     return url.strip().rstrip("/").lower().split("?")[0]
 
-def load_applied() -> tuple[set, set]:
-    """Return (applied_urls, applied_company_titles) from the log."""
-    if not LOG_PATH.exists():
-        return set(), set()
-    urls, company_titles = set(), set()
-    with open(LOG_PATH, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if row.get("url"):
-                urls.add(_norm_url(row["url"]))
-            c = (row.get("company") or "").strip().lower()
-            t = (row.get("title") or "").strip().lower()
-            if c and t:
-                company_titles.add((c, t))
-    return urls, company_titles
+def load_applied() -> tuple[set, set, set]:
+    """Return (applied_urls, applied_company_titles, applied_job_keys) from the log."""
+    urls, company_titles, job_keys = set(), set(), set()
+    if _USE_SHEETS:
+        import pandas as pd
+        log = read_sheet("applied_log")
+        rows = log.to_dict(orient="records") if not log.empty else []
+    else:
+        if not LOG_PATH.exists():
+            return set(), set(), set()
+        with open(LOG_PATH, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    for row in rows:
+        if row.get("url"):
+            urls.add(_norm_url(row["url"]))
+        c = (row.get("company") or "").strip().lower()
+        t = (row.get("title") or "").strip().lower()
+        if c and t:
+            company_titles.add((c, t))
+        if row.get("job_key"):
+            job_keys.add(row["job_key"])
+    return urls, company_titles, job_keys
 
-def log_result(url, company, title, source, status, notes=""):
-    write_header = not LOG_PATH.exists()
-    with open(LOG_PATH, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
-        if write_header:
-            writer.writeheader()
-        writer.writerow({"url": url, "company": company, "title": title,
-                         "source": source, "status": status,
-                         "timestamp": datetime.now().isoformat(), "notes": notes})
+def log_result(url, company, title, source, status, notes="", location=""):
+    row = {"job_key": _make_job_key(title, company, location),
+           "url": url, "company": company, "title": title,
+           "source": source, "status": status,
+           "timestamp": datetime.now().isoformat(), "notes": notes}
+    if _USE_SHEETS:
+        _sheets_append("applied_log", [row])
+    else:
+        write_header = not LOG_PATH.exists()
+        with open(LOG_PATH, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
 
 
 # ── Low-level Playwright helpers ──────────────────────────────────────────────
@@ -737,22 +768,97 @@ def apply_lever(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         return "failed", str(e)[:200]
 
 
+def _debug_inputs(page) -> str:
+    try:
+        return str(page.evaluate(
+            "() => Array.from(document.querySelectorAll('input'))"
+            ".map(i => i.id + '|' + i.name + '|' + i.type)"
+        ))
+    except Exception:
+        return "unavailable"
+
+
 def linkedin_login(page: Page):
     email = os.getenv("LINKEDIN_EMAIL")
     password = os.getenv("LINKEDIN_PASSWORD")
     if not email or not password:
         raise RuntimeError("LinkedIn credentials missing from .env")
-    page.goto("https://www.linkedin.com/login", wait_until="load", timeout=30000)
-    page.wait_for_selector("#username", timeout=30000)
-    time.sleep(1)
-    page.click("#username")
-    page.type("#username", email, delay=60)
-    page.wait_for_selector("#password", timeout=10000)
-    page.click("#password")
-    page.type("#password", password, delay=60)
+    print(f"  LinkedIn email: {email[:4]}*** | password loaded: {bool(password)}")
+    page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=30000)
+    time.sleep(3)
+
+    # Fill email — LinkedIn uses React auto-IDs; try each nth match until one is actionable
+    email_filled = False
+    for sel in ["input[autocomplete='username']", "input[type='email']"]:
+        for nth in range(3):
+            try:
+                page.locator(sel).nth(nth).fill(email, timeout=2000)
+                print(f"  Email filled via {sel}[{nth}]")
+                email_filled = True
+                break
+            except Exception:
+                continue
+        if email_filled:
+            break
+    if not email_filled:
+        inputs = _debug_inputs(page)
+        raise RuntimeError(f"LinkedIn login: could not fill email. Inputs found: {inputs}")
+
+    time.sleep(0.5)
+
+    # Fill password
+    pwd_filled = False
+    for sel in ["input[autocomplete='current-password']", "input[type='password']"]:
+        for nth in range(3):
+            try:
+                page.locator(sel).nth(nth).fill(password, timeout=2000)
+                print(f"  Password filled via {sel}[{nth}]")
+                pwd_filled = True
+                break
+            except Exception:
+                continue
+        if pwd_filled:
+            break
+    if not pwd_filled:
+        raise RuntimeError("LinkedIn login: could not fill password field")
+
     time.sleep(0.5)
     page.click("button[type='submit']")
-    time.sleep(5)
+
+    # Wait for navigation away from the login page
+    try:
+        page.wait_for_url(lambda u: "linkedin.com/login" not in u, timeout=15000)
+    except Exception:
+        raise RuntimeError("LinkedIn login failed — still on login page (wrong credentials?)")
+
+    # Clean success — landed on feed
+    if "/feed" in page.url:
+        return
+
+    # Security checkpoint or CAPTCHA — pause and let the user handle it
+    if any(k in page.url for k in ["checkpoint", "challenge", "captcha", "verify"]):
+        print("\n  ! LinkedIn security check detected. Complete it in the browser window.")
+        print("    Waiting up to 90 seconds...")
+        try:
+            page.wait_for_url(lambda u: "/feed" in u, timeout=90000)
+            print("  LinkedIn login completed after security check.")
+            return
+        except Exception:
+            raise RuntimeError("LinkedIn security check not completed within 90 seconds.")
+
+    # 2FA / email verification — same treatment
+    if "two-step" in page.url or "verification" in page.url or "pin" in page.url:
+        print("\n  ! LinkedIn 2FA detected. Complete it in the browser window.")
+        print("    Waiting up to 90 seconds...")
+        try:
+            page.wait_for_url(lambda u: "/feed" in u, timeout=90000)
+            print("  LinkedIn login completed after 2FA.")
+            return
+        except Exception:
+            raise RuntimeError("LinkedIn 2FA not completed within 90 seconds.")
+
+    # Anything else — assume we're in (e.g. redirected to a job page directly)
+    print(f"  LinkedIn login: landed on {page.url[:80]}")
 
 
 _LI_EASY_APPLY = (
@@ -896,10 +1002,12 @@ def main():
 
     profile = load_profile()
     jobs = load_jobs()
-    applied_urls, applied_company_titles = load_applied()
+    applied_urls, applied_company_titles, applied_job_keys = load_applied()
 
     def already_applied(j: dict) -> bool:
         if j.get("url") and _norm_url(j["url"]) in applied_urls:
+            return True
+        if j.get("job_key") and j["job_key"] in applied_job_keys:
             return True
         c = (j.get("company") or "").strip().lower()
         t = (j.get("title") or "").strip().lower()
@@ -923,6 +1031,7 @@ def main():
 
         for i, job in enumerate(pending):
             url, company, title, source = job.get("url",""), job.get("company",""), job.get("title",""), job.get("source","")
+            location = job.get("location", "")
             ats = detect_ats(url)
             print(f"[{i+1}/{len(pending)}] {company} — {title} ({ats})")
             if ats == "greenhouse":
@@ -937,7 +1046,7 @@ def main():
                 status, notes = apply_generic(page, job, profile)
             print(f"  → {status}" + (f": {notes}" if notes else ""))
             if status != "failed":
-                log_result(url, company, title, source, status, notes)
+                log_result(url, company, title, source, status, notes, location)
             counts[status] = counts.get(status, 0) + 1
             time.sleep(2)
 

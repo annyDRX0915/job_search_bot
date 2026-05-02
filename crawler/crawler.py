@@ -1,10 +1,37 @@
+import hashlib
+import os
 import re
+import sys
 import requests
 import pandas as pd
 import yaml
 import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any, Dict, List
+
+from dotenv import load_dotenv
+load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+_USE_SHEETS = bool(os.getenv("SPREADSHEET_ID"))
+if _USE_SHEETS:
+    from utils.gsheets import write_sheet
+
+
+def _make_job_key(title: str, company: str, location: str) -> str:
+    def _n(s): return re.sub(r'[^a-z0-9]', '', (s or '').lower().strip())
+    raw = f"{_n(title)}|{_n(company)}|{_n(location)}"
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def strip_html(text: str) -> str:
+    if not text:
+        return ""
+    import html as _html
+    text = _html.unescape(text)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 HEADERS = {
@@ -200,7 +227,7 @@ def fetch_greenhouse_jobs(board_token: str) -> List[Dict[str, Any]]:
             "team": (job.get("departments") or [{}])[0].get("name") if job.get("departments") else None,
             "employment_type": None,
             "url": job.get("absolute_url"),
-            "description": job.get("content"),
+            "description": strip_html(job.get("content")),
             "posted_at": job.get("updated_at"),
             "job_id": job.get("id"),
         })
@@ -227,7 +254,7 @@ def fetch_lever_jobs(company_handle: str) -> List[Dict[str, Any]]:
             "team": categories.get("team"),
             "employment_type": categories.get("commitment"),
             "url": job.get("hostedUrl") or job.get("applyUrl"),
-            "description": job.get("descriptionPlain") or job.get("description"),
+            "description": strip_html(job.get("descriptionPlain") or job.get("description")),
             "posted_at": job.get("createdAt"),
             "job_id": job.get("id"),
         })
@@ -302,8 +329,14 @@ def main():
     df = df[df.apply(lambda r: is_entry_level(r["title"], r.get("description", "")), axis=1)].reset_index(drop=True)
     print(f"Filtered to {len(df)} entry-level jobs (dropped {before - len(df)})")
 
-    df.to_csv("jobs.csv", index=False, encoding="utf-8-sig")
-    print(f"Saved {len(df)} jobs to jobs.csv")
+    df["job_key"] = df.apply(lambda r: _make_job_key(r["title"], r["company"], r["location"]), axis=1)
+
+    if _USE_SHEETS:
+        write_sheet("jobs", df)
+        print(f"Saved {len(df)} jobs to Sheets:jobs")
+    else:
+        df.to_csv("jobs.csv", index=False, encoding="utf-8-sig")
+        print(f"Saved {len(df)} jobs to jobs.csv")
 
 
 if __name__ == "__main__":

@@ -1,14 +1,28 @@
+import hashlib
 import os
 import re
+import sys
 import tempfile
 import time
+from pathlib import Path
 from urllib.parse import quote_plus
+
+
+def _make_job_key(title: str, company: str, location: str) -> str:
+    def _n(s): return re.sub(r'[^a-z0-9]', '', (s or '').lower().strip())
+    raw = f"{_n(title)}|{_n(company)}|{_n(location)}"
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 import pandas as pd
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+_USE_SHEETS = bool(os.getenv("SPREADSHEET_ID"))
+if _USE_SHEETS:
+    from utils.gsheets import write_sheet
 
 KEYWORDS = [
     "machine learning engineer",
@@ -354,25 +368,72 @@ def linkedin_login(page) -> bool:
     if not email or not password:
         print("No LinkedIn credentials found in .env — skipping login.")
         return False
+    print(f"Logging in to LinkedIn as {email[:4]}***")
 
-    print("Logging in to LinkedIn...")
-    page.goto("https://www.linkedin.com/login", wait_until="networkidle", timeout=60000)
-    page.wait_for_selector("input#username", timeout=30000)
-    page.click("input#username")
-    page.fill("input#username", "")
-    page.type("input#username", email, delay=50)
-    page.click("input#password")
-    page.fill("input#password", "")
-    page.type("input#password", password, delay=50)
+    page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=60000)
+    time.sleep(3)
+
+    # Fill email — LinkedIn uses React auto-IDs; try each nth match until one is actionable
+    email_filled = False
+    for sel in ["input[autocomplete='username']", "input[type='email']"]:
+        for nth in range(3):
+            try:
+                page.locator(sel).nth(nth).fill(email, timeout=2000)
+                print(f"  Email filled via {sel}[{nth}]")
+                email_filled = True
+                break
+            except Exception:
+                continue
+        if email_filled:
+            break
+    if not email_filled:
+        print(f"  ! Could not fill email field. Inputs on page: {_debug_inputs(page)}")
+        return False
+
+    time.sleep(0.5)
+
+    # Fill password
+    pwd_filled = False
+    for sel in ["input[autocomplete='current-password']", "input[type='password']"]:
+        for nth in range(3):
+            try:
+                page.locator(sel).nth(nth).fill(password, timeout=2000)
+                print(f"  Password filled via {sel}[{nth}]")
+                pwd_filled = True
+                break
+            except Exception:
+                continue
+        if pwd_filled:
+            break
+    if not pwd_filled:
+        print("  ! Could not fill password field")
+        return False
+
+    time.sleep(0.5)
     page.click("button[type='submit']")
-    page.wait_for_url(re.compile(r"linkedin\.com/(feed|jobs|checkpoint)"), timeout=30000)
 
-    if "checkpoint" in page.url:
-        print("LinkedIn security checkpoint detected — complete it manually in the browser, then press Enter.")
+    try:
+        page.wait_for_url(lambda u: "linkedin.com/login" not in u, timeout=15000)
+    except Exception:
+        print("  ! Still on login page after submit — check credentials")
+        return False
+
+    if any(k in page.url for k in ["checkpoint", "challenge", "captcha", "verify", "two-step"]):
+        print("LinkedIn security check — complete it in the browser, then press Enter.")
         input()
 
-    print("Logged in.")
+    print(f"Logged in. Current page: {page.url[:60]}")
     return True
+
+
+def _debug_inputs(page) -> str:
+    try:
+        return str(page.evaluate(
+            "() => Array.from(document.querySelectorAll('input'))"
+            ".map(i => i.id + '|' + i.name + '|' + i.type)"
+        ))
+    except Exception:
+        return "unavailable"
 
 
 def main():
@@ -455,8 +516,14 @@ def main():
     df = df[df.apply(lambda r: is_entry_level_description(r["description"], r["title"]), axis=1)].reset_index(drop=True)
     print(f"Filtered to {len(df)} jobs after experience/PhD check (dropped {before - len(df)})")
 
-    df.to_csv("linkedin_jobs.csv", index=False, encoding="utf-8-sig")
-    print(f"Saved {len(df)} jobs to linkedin_jobs.csv")
+    df["job_key"] = df.apply(lambda r: _make_job_key(r["title"], r["company"], r["location"]), axis=1)
+
+    if _USE_SHEETS:
+        write_sheet("linkedin_jobs", df)
+        print(f"Saved {len(df)} jobs to Sheets:linkedin_jobs")
+    else:
+        df.to_csv("linkedin_jobs.csv", index=False, encoding="utf-8-sig")
+        print(f"Saved {len(df)} jobs to linkedin_jobs.csv")
 
 
 if __name__ == "__main__":

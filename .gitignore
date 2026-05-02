@@ -1,4 +1,16 @@
+# secrets & credentials
 .env
+*.json
+
+# python
 .venv/
 __pycache__/
+*.pyc
+
+# data files
 *.csv
+
+# personal data
+resume/
+apply/profile.yaml
+apply/past_exp.txt
