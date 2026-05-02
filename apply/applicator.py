@@ -689,7 +689,7 @@ def detect_ats(url: str) -> str:
     if not url:
         return "unknown"
     u = url.lower()
-    if "greenhouse.io" in u or "gh_jid=" in u:
+    if "greenhouse.io" in u or "gh_jid=" in u or "boards.greenhouse.io" in u:
         return "greenhouse"
     if "lever.co" in u:
         return "lever"
@@ -697,7 +697,72 @@ def detect_ats(url: str) -> str:
         return "linkedin"
     if "workday.com" in u or "myworkdayjobs.com" in u:
         return "workday"
+    if "indeed.com" in u:
+        return "indeed"
+    if "taleo.net" in u:
+        return "taleo"
+    if "successfactors" in u or "sapsf.com" in u:
+        return "successfactors"
+    if "icims.com" in u:
+        return "icims"
+    if "smartrecruiters.com" in u:
+        return "smartrecruiters"
+    if "bamboohr.com" in u:
+        return "bamboohr"
+    if "jobvite.com" in u:
+        return "jobvite"
+    if "brassring.com" in u or "kenexa" in u:
+        return "brassring"
+    if "jazzhr.com" in u or "resumatorjobs.com" in u:
+        return "jazzhr"
+    if "rippling.com" in u:
+        return "rippling"
+    if "ashbyhq.com" in u or "app.ashbyhq.com" in u:
+        return "ashby"
     return "generic"
+
+
+# ATSs that require login, anti-bot, or account creation — skip automation,
+# open in real browser for manual apply instead.
+_MANUAL_ATS = {
+    "workday", "indeed", "taleo", "successfactors", "icims",
+    "smartrecruiters", "bamboohr", "jobvite", "brassring", "jazzhr", "rippling",
+}
+
+# Signals that a page is a CAPTCHA / bot-detection wall
+_BOT_SIGNALS = [
+    "captcha", "robot check", "security check", "are you a robot",
+    "verify you are human", "verify you're human", "unusual traffic",
+    "ddos-guard", "access denied", "403 forbidden", "just a moment",
+    "checking your browser", "enable javascript and cookies",
+]
+
+
+def _is_bot_blocked(page: Page) -> bool:
+    try:
+        content = page.content().lower()
+        title = page.title().lower()
+        return any(s in content or s in title for s in _BOT_SIGNALS)
+    except Exception:
+        return False
+
+
+def apply_manual(url: str, job: dict) -> tuple[str, str]:
+    """Open URL in the system browser; prompt the user to apply, then log the result."""
+    import webbrowser
+    print(f"\n  Opening in your browser: {url[:100]}")
+    webbrowser.open(url)
+    print(f"  → Apply manually for {job.get('company','?')} — {job.get('title','?')}")
+    print("  Press Enter when applied | s = skip (won't retry) | q = quit: ", end="", flush=True)
+    try:
+        choice = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        choice = "q"
+    if choice == "q":
+        raise SystemExit("User quit.")
+    if choice == "s":
+        return "skipped", "skipped by user"
+    return "applied", "manually applied via browser"
 
 def resolve_resume(profile: dict, job_title: str) -> str:
     title = (job_title or "").lower()
@@ -733,6 +798,9 @@ def apply_greenhouse(page: Page, job: dict, profile: dict) -> tuple[str, str]:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         time.sleep(2)
+        if _is_bot_blocked(page):
+            print("  ! Bot/CAPTCHA block detected on Greenhouse page.")
+            return apply_manual(url, job)
         clicked = click_apply_or_prompt(page)
         if clicked:
             wait_for_form(page, ["#first_name", "input[name='first_name']",
@@ -759,6 +827,9 @@ def apply_lever(page: Page, job: dict, profile: dict) -> tuple[str, str]:
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         wait_for_form(page, ["input[name='name']", "input[type='email']", "input[type='file']"], timeout=5000)
         time.sleep(1)
+        if _is_bot_blocked(page):
+            print("  ! Bot/CAPTCHA block detected on Lever page.")
+            return apply_manual(url, job)
         fill_standard_fields(page, profile, resume, cl)
         handle_common_questions(page, profile, job)
         time.sleep(1)
@@ -906,9 +977,15 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
             pass
         btn = page.locator(_LI_EASY_APPLY).first
         if btn.count() == 0:
-            # No Easy Apply — click the external Apply link and let LinkedIn's JS navigate
+            # No Easy Apply — check if external link goes to a manual ATS before attempting
             ext = page.locator("a:has-text('Apply'), a.jobs-apply-button").first
             if ext.count() > 0:
+                href = ext.get_attribute("href") or ""
+                ext_ats = detect_ats(href) if href else "unknown"
+                if ext_ats in _MANUAL_ATS:
+                    print(f"  → External Apply goes to {ext_ats} (manual-only). Opening browser.")
+                    return apply_manual(href, job)
+
                 print("  → No Easy Apply, clicking external Apply link.")
                 opens_new_tab = ext.get_attribute("target") in ("_blank", "_new")
                 if opens_new_tab and _allow_new_tab:
@@ -918,6 +995,14 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                     new_page.wait_for_load_state("domcontentloaded", timeout=15000)
                     time.sleep(2)
                     print(f"  → Opened new tab: {new_page.url[:80]}")
+                    # Detect redirect back to LinkedIn (not the original job page) — bail out
+                    if "linkedin.com" in new_page.url and "/jobs/view/" not in new_page.url:
+                        new_page.close()
+                        return "skipped", f"External apply redirected back to LinkedIn ({new_page.url[:80]})"
+                    if _is_bot_blocked(new_page):
+                        ext_url = new_page.url
+                        new_page.close()
+                        return apply_manual(ext_url or href, job)
                     if "linkedin.com/jobs/view/" in new_page.url:
                         result = apply_linkedin(new_page, job, profile, _allow_new_tab=False)
                     else:
@@ -925,22 +1010,28 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                     new_page.close()
                     return result
                 elif opens_new_tab:
-                    # Secondary tab context — goto href directly to avoid spawning another tab
-                    href = ext.get_attribute("href") or ""
                     if not href:
                         return "skipped", "External apply link has no href"
                     print(f"  → Navigating in-place to: {href[:80]}")
                     page.goto(href, wait_until="domcontentloaded", timeout=30000)
                     time.sleep(2)
+                    if "linkedin.com" in page.url and "/jobs/view/" not in page.url:
+                        return "skipped", f"External apply redirected back to LinkedIn ({page.url[:80]})"
+                    if _is_bot_blocked(page):
+                        return apply_manual(page.url or href, job)
                     return apply_generic(page, job, profile, already_navigated=True)
                 else:
                     try:
                         with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
                             ext.click()
                     except Exception:
-                        pass  # some redirects don't trigger a full navigation event
+                        pass
                     time.sleep(2)
                     print(f"  → Landed on: {page.url[:80]}")
+                    if "linkedin.com" in page.url and "/jobs/view/" not in page.url:
+                        return "skipped", f"External apply redirected back to LinkedIn ({page.url[:80]})"
+                    if _is_bot_blocked(page):
+                        return apply_manual(page.url, job)
                     return apply_generic(page, job, profile, already_navigated=True)
             return "skipped", "No Apply button found"
         btn.click()
@@ -963,6 +1054,9 @@ def apply_generic(page: Page, job: dict, profile: dict, already_navigated: bool 
         if not already_navigated:
             page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
             time.sleep(2)
+        if _is_bot_blocked(page):
+            print("  ! Bot/CAPTCHA block detected.")
+            return apply_manual(page.url or job["url"], job)
         if "linkedin.com/jobs/view/" in page.url:
             return apply_linkedin(page, job, profile, _allow_new_tab=False)
         if is_greenhouse_page(page):
@@ -1034,14 +1128,18 @@ def main():
             location = job.get("location", "")
             ats = detect_ats(url)
             print(f"[{i+1}/{len(pending)}] {company} — {title} ({ats})")
-            if ats == "greenhouse":
+            if ats in _MANUAL_ATS:
+                # Login-required or anti-bot ATS — open in real browser, don't attempt auto-fill
+                status, notes = apply_manual(url, job)
+            elif ats == "greenhouse":
                 status, notes = apply_greenhouse(page, job, profile)
             elif ats == "lever":
                 status, notes = apply_lever(page, job, profile)
             elif ats == "linkedin":
                 status, notes = apply_linkedin(page, job, profile)
-            elif ats == "workday":
-                status, notes = "skipped", "Workday not supported"
+            elif ats == "ashby":
+                # Ashby forms are Greenhouse-compatible
+                status, notes = apply_greenhouse(page, job, profile)
             else:
                 status, notes = apply_generic(page, job, profile)
             print(f"  → {status}" + (f": {notes}" if notes else ""))
