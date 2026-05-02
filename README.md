@@ -41,10 +41,62 @@ Edit `apply/profile.yaml` with your personal info, work authorization, and resum
 .venv/bin/python crawler/crawler_linkedin.py # LinkedIn scrape → Sheets:linkedin_jobs
 .venv/bin/python crawler/crawler_email.py    # Gmail job alerts → Sheets:email_jobs
 .venv/bin/python rank/ranker.py              # AI rank → Sheets:ranked_jobs (top 40)
+chrome-bot                                   # open bot Chrome (see setup below)
 .venv/bin/python apply/applicator.py        # auto-apply in rank order (interactive)
 ```
 
 `crawler.py` and `crawler_email.py` also run automatically every day via GitHub Actions (9 am UTC). `crawler_linkedin.py` and `apply/applicator.py` are local-only (require a real browser session).
+
+## Applicator setup (CDP mode)
+
+The applicator connects to your real Chrome browser via CDP so it reuses your existing login sessions (LinkedIn, Workday, Indeed, etc.) and avoids bot detection.
+
+### One-time setup
+
+**1. Create a dedicated Chrome profile for the bot:**
+
+```bash
+mkdir -p "$HOME/chrome-cdp-profile"
+```
+
+**2. Add a `chrome-bot` alias to `~/.zshrc`:**
+
+```bash
+echo 'alias chrome-bot="/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=$HOME/chrome-cdp-profile"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**3. Launch the bot Chrome and log in once:**
+
+```bash
+chrome-bot
+```
+
+In the window that opens, log into LinkedIn (and any other job sites you use). These sessions are saved in `~/chrome-cdp-profile` and persist across runs.
+
+### Daily usage
+
+```bash
+chrome-bot                                 # open bot Chrome (keep this terminal open)
+.venv/bin/python apply/applicator.py      # connect via CDP and start applying
+```
+
+Your normal Chrome (opened from Dock/Spotlight) is completely unaffected — both windows run simultaneously.
+
+### Flags
+
+```bash
+.venv/bin/python apply/applicator.py --no-cdp    # fall back to fresh browser + LinkedIn login
+.venv/bin/python apply/applicator.py --no-ai     # skip AI answers, rule-based only
+.venv/bin/python apply/applicator.py --cdp-url http://localhost:9222  # custom CDP endpoint
+```
+
+### How it works
+
+- **Greenhouse / Lever / LinkedIn Easy Apply**: fully automated — bot fills and you confirm submit
+- **Workday / Indeed / Taleo / other login-required ATSs**: bot navigates to the page (you're already logged in), pre-fills name/email/phone/resume, then hands off — you fill the rest and submit
+- **Bot/CAPTCHA detected**: falls back to same pre-fill + hand-off flow
+- For every job: `Enter` = applied, `n` = next page (bot fills again), `s` = skip, `q` = quit
 
 ## How it works
 
