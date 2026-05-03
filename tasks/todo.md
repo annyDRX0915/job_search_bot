@@ -1,6 +1,6 @@
 # Job Search Bot — Google Sheets Migration + Email Pipeline
 
-## Status: Phase 4 in progress
+## Status: Phase 4 mostly done — notifier + GitHub Actions CI remaining
 
 ---
 
@@ -14,7 +14,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 | `linkedin_jobs` | `linkedin_jobs.csv`       | `crawler/crawler_linkedin.py` | `rank/ranker.py`                  |
 | `email_jobs`    | _(new)_                   | `crawler/crawler_email.py`    | `rank/ranker.py`                  |
 | `ranked_jobs`   | `ranked_jobs.csv`         | `rank/ranker.py`              | `apply/applicator.py`             |
-| `applied_log`   | `apply/applied_log.csv`   | `apply/applicator.py`         | `rank/ranker.py`, `applicator.py` |
+| `applied_log`   | `apply/applied_log.csv`   | `apply/applicator.py`, `agents/email_agent.py` | `rank/ranker.py`, `applicator.py` |
 
 **Auth:** Service account (no OAuth flow — just a JSON key stored as a GitHub secret).  
 **Local fallback:** If `SPREADSHEET_ID` is not set, scripts fall back to local CSVs.
@@ -48,7 +48,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 
 ---
 
-## Phase 2 — Sheets Helper (`utils/gsheets.py`) ✅
+## Phase 2 — Sheets Helper (`utils/gsheets.py`)
 
 - [x] Create `utils/__init__.py` (empty)
 - [x] Create `utils/gsheets.py` with three functions:
@@ -57,6 +57,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
   - [x] `append_rows(tab: str, rows: list[dict])`
 - [x] Auth: reads `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_SERVICE_ACCOUNT_JSON_PATH`
 - [x] If `SPREADSHEET_ID` not set → raise a clear error
+- [ ] Add `upsert_rows(tab: str, key_col: str, rows: list[dict])` — update row in-place by key, append if not found (needed by email agent to update stage columns)
 
 ---
 
@@ -79,32 +80,68 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 - [x] `main()`: writes `ranked_jobs` sheet (CSV fallback)
 - [x] AI re-ranking via OpenAI `gpt-4o-mini` after rule-based pre-filter
 - [x] `job_key` used for deduplication
+- [ ] `load_applied()`: handle new schema — job is "seen" if any row exists; handle rows missing `interviewed`/`rejected` columns gracefully (old CSV)
 
 ### `apply/applicator.py`
 - [x] `load_jobs()`: reads `ranked_jobs` sheet (CSV fallback)
 - [x] `load_applied()`: reads `applied_log` sheet (CSV fallback)
 - [x] `log_result()`: appends to `applied_log` sheet (CSV fallback)
 - [x] `job_key` stored in log and checked for skip
+- [x] `LOG_FIELDS` updated to include `interviewed` and `rejected` columns (empty on new applications)
+- [ ] `load_applied()`: skip job if row exists with any non-empty value in `status`, `interviewed`, or `rejected` (handle old CSV rows without these columns)
 
 ---
 
 ## Phase 4 — Email Pipeline
 
 ### One-time Gmail auth (`scripts/gmail_auth.py`)
-- [ ] Local OAuth2 flow to generate a refresh token
-- [ ] Prints the refresh token to copy into GitHub Secrets
+- [x] Local OAuth2 flow to generate a refresh token
+- [x] Prints the refresh token to copy into GitHub Secrets
 
 ### Gmail crawler (`crawler/crawler_email.py`)
-- [ ] Auth with Gmail API using refresh token
-- [ ] Fetch emails from last 24h from `jobalerts-noreply@linkedin.com` and `alert@indeed.com`
-- [ ] Parse job listings from HTML email body (title, company, location, url)
+- [x] Auth with Gmail API using refresh token
+- [x] Fetch emails from last 24h from `jobalerts-noreply@linkedin.com` and `alert@indeed.com`
+- [x] Parse job listings from HTML email body (title, company, location, url)
 - [ ] Flag "important" emails (subject contains: interview, invitation, offer, next steps, assessment)
-- [ ] Write parsed jobs → `write_sheet("email_jobs", df)`
+- [x] Write parsed jobs → `write_sheet("email_jobs", df)`
 
-### AI email agent (`agents/email_agent.py`)
-- [ ] Accept list of flagged important email bodies
-- [ ] Call OpenAI API → 3–5 bullet summary + recommended action per email
-- [ ] Return structured summaries for the notifier
+### Applied log schema (`applied_log` sheet) ✅
+Final schema (already migrated):
+`job_key | url | company | title | source | status | interviewed | rejected | timestamp | notes`
+- `status`: applied / skipped / failed (written by applicator)
+- `interviewed`: "interviewed" or empty (written by email agent)
+- `rejected`: "rejected" or empty (written by email agent)
+Old rows keep their existing values — migration scripts already ran.
+
+### AI email agent (`agents/email_agent.py`) ✅
+Three-pass pipeline over **all** emails from last 24h:
+
+**Pass 1 — Static spam pre-filter (free, no tokens)**
+- [x] Load `agents/spam_senders.json` — known spam domains + subject keyword patterns
+- [x] Drop job alert senders already handled by `crawler_email.py` (no tokens wasted)
+- [x] Drop emails matching known spam senders or subject patterns before any AI call
+
+**Pass 2 — AI triage (batch call, subjects + senders + snippets only)**
+- [x] Send surviving emails to `gpt-4o-mini` in one call
+- [x] Model returns category per email: `interview`, `rejection`, `offer`, `job_application`, `important`, `spam`, `newsletter`, `notification`
+- [x] Append any newly AI-identified spam senders back to `agents/spam_senders.json`
+- [x] Discard `spam` / `newsletter` / `notification` after categorization
+
+**Pass 3 — AI summarize (targeted, full body)**
+- [x] For `interview`, `rejection`, `offer`, `important`, `job_application`: fetch full email body
+- [x] Per-email call → 1–2 sentence summary + recommended action
+- [x] Post-summarize reclassification: summaries containing rejection phrases upgrade `important` → `rejection`
+
+**Applied log updates**
+- [x] For `interview` emails: find matching row in `applied_log` by `company + title` fuzzy match → set `interviewed` = "interviewed"
+- [x] For `rejection` emails: find matching row → set `rejected` = "rejected"
+- [x] Uses read → update in-memory → write_sheet (upsert_rows not needed)
+- [x] Logs when no match found in applied_log
+
+**Output**
+- [x] Build structured digest: ACTION REQUIRED → OFFERS → REJECTIONS → APPLICATION UPDATES (capped at 5) → OTHER IMPORTANT → filtered count with breakdown
+- [x] Post digest to Discord via `DISCORD_WEBHOOK_URL` (chunked into ≤1900 char messages)
+- [x] Seed file: `agents/spam_senders.json` with common spam/newsletter domains
 
 ### Discord notifier (`notify/notifier.py`)
 - [ ] Read top 10 rows from `ranked_jobs` sheet
@@ -124,11 +161,16 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 
 - [x] `utils/gsheets.py` standalone — read/write/append confirmed working
 - [x] `crawler/crawler.py` locally — `jobs` tab populates in Sheets
-- [ ] `crawler/crawler_linkedin.py` locally — confirm `linkedin_jobs` tab populates
-- [ ] `rank/ranker.py` locally — confirm `ranked_jobs` tab populates, `applied_log` read correctly
-- [ ] `apply/applicator.py` locally on one job — confirm `applied_log` tab gets a new row
+- [x] `crawler/crawler_linkedin.py` locally — confirm `linkedin_jobs` tab populates
+- [x] `rank/ranker.py` locally — confirm `ranked_jobs` tab populates, `applied_log` read correctly
+- [x] `apply/applicator.py` locally on one job — confirm `applied_log` tab gets a new row
 - [ ] `scripts/gmail_auth.py` locally — confirm refresh token works
 - [ ] `crawler/crawler_email.py` locally — confirm `email_jobs` tab populates
+- [ ] `utils/gsheets.py` `upsert_rows()` — confirm in-place update and insert-if-missing both work
+- [ ] `apply/applicator.py` locally — confirm new row in `applied_log` has `interviewed` and `rejected` columns (empty)
+- [x] `agents/email_agent.py` locally — confirm `interviewed`/`rejected` columns update correctly on matched rows
+- [x] `agents/email_agent.py` locally — confirm Discord digest arrives with correct sections
+- [x] `agents/spam_senders.json` — confirm newly flagged senders are appended after a run
 - [ ] `notify/notifier.py` locally — confirm Discord message arrives
 - [ ] Push → trigger GitHub Actions manually → confirm full pipeline runs in cloud
 

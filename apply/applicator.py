@@ -44,7 +44,8 @@ def _read_past_exp() -> str:
         return ""
 
 PAST_EXPERIENCE = _read_past_exp()
-LOG_FIELDS = ["job_key", "url", "company", "title", "source", "status", "timestamp", "notes"]
+LOG_FIELDS = ["job_key", "url", "company", "title", "source", "status",
+              "interviewed", "rejected", "timestamp", "notes"]
 
 APPLY_BTNS = [
     "a.btn-apply", "a[href*='#app']",
