@@ -124,7 +124,7 @@ def fetch_all_emails(service) -> list[dict]:
     """Fetch metadata for all emails from last 24h (handles pagination)."""
     msg_ids, page_token = [], None
     while True:
-        params = {"userId": "me", "q": "newer_than:4d", "maxResults": 500}
+        params = {"userId": "me", "q": "newer_than:1d", "maxResults": 500}
         if page_token:
             params["pageToken"] = page_token
         resp = service.users().messages().list(**params).execute()
