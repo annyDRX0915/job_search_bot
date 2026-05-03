@@ -516,7 +516,7 @@ def main():
     df = df[df.apply(lambda r: is_entry_level_description(r["description"], r["title"]), axis=1)].reset_index(drop=True)
     print(f"Filtered to {len(df)} jobs after experience/PhD check (dropped {before - len(df)})")
 
-    df["job_key"] = df.apply(lambda r: _make_job_key(r["title"], r["company"], r["location"]), axis=1)
+    df["job_key"] = [_make_job_key(r["title"], r["company"], r["location"]) for _, r in df.iterrows()]
 
     if _USE_SHEETS:
         write_sheet("linkedin_jobs", df)

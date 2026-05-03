@@ -342,7 +342,7 @@ def load_jobs() -> pd.DataFrame:
 
     # Compute job_key if crawlers haven't already
     if "job_key" not in df.columns:
-        df["job_key"] = df.apply(lambda r: _make_job_key(r["title"], r["company"], r["location"]), axis=1)
+        df["job_key"] = [_make_job_key(r["title"], r["company"], r["location"]) for _, r in df.iterrows()]
 
     # Dedupe same role at same company: keep Canada location first, then first seen
     canada_terms = ["canada", "toronto", "vancouver", "montreal", "ottawa",
