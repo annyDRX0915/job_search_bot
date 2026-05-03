@@ -1,6 +1,6 @@
 # Job Search Bot — Google Sheets Migration + Email Pipeline
 
-## Status: Phase 4 mostly done — notifier + GitHub Actions CI remaining
+## Status: Phase 4 done ✅ — Phase 5 CI test passed, notifier optional
 
 ---
 
@@ -172,7 +172,7 @@ Three-pass pipeline over **all** emails from last 24h:
 - [x] `agents/email_agent.py` locally — confirm Discord digest arrives with correct sections
 - [x] `agents/spam_senders.json` — confirm newly flagged senders are appended after a run
 - [ ] `notify/notifier.py` locally — confirm Discord message arrives
-- [ ] Push → trigger GitHub Actions manually → confirm full pipeline runs in cloud
+- [x] Push → trigger GitHub Actions manually → confirm full pipeline runs in cloud
 
 ---
 
