@@ -1,0 +1,46 @@
+name: Daily Job Pipeline
+
+on:
+  schedule:
+    - cron: "0 9 * * *"   # 9am UTC = 5am ET
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+      GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+      GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Crawl Greenhouse + Lever jobs
+        run: python crawler/crawler.py
+
+      - name: Crawl Gmail job alert emails
+        run: python crawler/crawler_email.py
+
+      - name: Rank jobs
+        run: python rank/ranker.py
+
+      - name: Email digest → Discord
+        run: python agents/email_agent.py
