@@ -752,6 +752,25 @@ def _is_bot_blocked(page: Page) -> bool:
         return False
 
 
+_JOB_EXPIRED_SIGNALS = [
+    "this job has expired",
+    "job is no longer available",
+    "job is no longer accepting applications",
+    "this job listing has expired",
+    "position has been filled",
+    "job has been removed",
+    "no longer available",
+]
+
+
+def _is_job_expired(page: Page) -> bool:
+    try:
+        content = page.content().lower()
+        return any(s in content for s in _JOB_EXPIRED_SIGNALS)
+    except Exception:
+        return False
+
+
 def apply_manual(page: Page, url: str, job: dict, profile: dict = None) -> tuple[str, str]:
     """
     CDP mode: navigate to URL in real Chrome, pre-fill standard fields, let user review + submit.
@@ -763,6 +782,10 @@ def apply_manual(page: Page, url: str, job: dict, profile: dict = None) -> tuple
         time.sleep(2)
     except Exception as e:
         print(f"  ! Navigation error: {e}")
+
+    if _is_job_expired(page):
+        print("  ! Job expired or no longer available — skipping")
+        return "skipped", "job expired or no longer available"
 
     if profile:
         resume = resolve_resume(profile, job.get("title", ""))
