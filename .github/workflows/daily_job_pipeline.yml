@@ -2,7 +2,7 @@ name: Daily Job Pipeline
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # 9am UTC = 5am ET
+    - cron: "30 16 * * *"  # 12:30pm ET (UTC-4)
   workflow_dispatch:        # allow manual trigger from GitHub UI
 
 jobs:

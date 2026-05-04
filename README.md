@@ -45,7 +45,7 @@ chrome-bot                                   # open bot Chrome (see setup below)
 .venv/bin/python apply/applicator.py        # auto-apply in rank order (interactive)
 ```
 
-`crawler.py` and `crawler_email.py` also run automatically every day via GitHub Actions (9 am UTC). `crawler_linkedin.py` and `apply/applicator.py` are local-only (require a real browser session).
+`crawler.py` and `crawler_email.py` also run automatically every day via GitHub Actions (12:30 pm ET). `crawler_linkedin.py` and `apply/applicator.py` are local-only (require a real browser session).
 
 ## Applicator setup (CDP mode)
 
@@ -154,6 +154,17 @@ All scripts fall back to local CSVs if `SPREADSHEET_ID` is not set.
 companies.yaml             # Greenhouse tokens + Lever handles to crawl
 apply/profile.yaml         # your info, work auth, resume path, Q&A answers
 scripts/gmail_auth.py      # one-time Gmail OAuth2 setup → prints GMAIL_REFRESH_TOKEN
-resume/                    # resume PDFs (Agentic AI, Data Science, Modeling)
 utils/gsheets.py           # Google Sheets helper (read_sheet / write_sheet / append_rows)
 ```
+
+## Not included in this repo
+
+These files contain personal info and are gitignored — you need to create them yourself:
+
+| File | What it is |
+|---|---|
+| `.env` | API keys and credentials (see Environment variables above) |
+| `apply/profile.yaml` | Your name, contact info, work authorization, resume path, and common Q&A answers |
+| `apply/past_exp.txt` | Work experience text used for AI-generated answers |
+| `resume/` | Your resume PDFs — place them anywhere and point `profile.yaml` at them |
+| `service-account-key.json` | Google service account key for Sheets access (download from Google Cloud Console) |

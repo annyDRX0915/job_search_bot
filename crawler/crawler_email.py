@@ -14,7 +14,7 @@ import os
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -95,6 +95,29 @@ def _make_job_key(title: str, company: str, location: str) -> str:
 
 import time as _time
 
+
+def _recency_tag_to_dt(tag: str, base: datetime) -> datetime:
+    """Convert '6h', '1d', 'Just posted', 'Today' relative to base datetime."""
+    tag = tag.strip().lower()
+    if tag in ("just posted", "today"):
+        return base
+    m = re.match(r'(\d+)([dh])', tag)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        return base - (timedelta(days=n) if unit == 'd' else timedelta(hours=n))
+    return base
+
+
+def _is_recent(posted_at: str, hours: int = 48) -> bool:
+    try:
+        dt = datetime.fromisoformat(posted_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() < hours * 3600
+    except Exception:
+        return True
+
+
 # ── job filters (mirrors crawler_linkedin.py) ─────────────────────────────────
 
 _COMPANY_BLOCKLIST = {
@@ -161,6 +184,8 @@ def _apply_filters(jobs: list[dict]) -> list[dict]:
     before = len(jobs)
     kept = []
     for j in jobs:
+        if not _is_recent(j.get("posted_at", ""), hours=120):
+            continue
         if not _is_relevant(j["title"]):
             continue
         if not _is_entry_level(j["title"]):
@@ -187,8 +212,11 @@ _REQ_SESSION = requests.Session()
 _REQ_SESSION.headers.update(_REQ_HEADERS)
 
 
-def _fetch_linkedin_description(url: str) -> str:
-    """Fetch LinkedIn public job page via requests with retry on 429."""
+def _fetch_linkedin_description(url: str) -> tuple[str, str]:
+    """Fetch LinkedIn public job page via requests with retry on 429.
+
+    Returns (description, posted_at_iso). posted_at_iso is "" when unavailable.
+    """
     for attempt in range(3):
         try:
             resp = _REQ_SESSION.get(url, timeout=12, allow_redirects=True)
@@ -196,7 +224,7 @@ def _fetch_linkedin_description(url: str) -> str:
                 _time.sleep(3 * (attempt + 1))
                 continue
             if resp.status_code != 200:
-                return ""
+                return "", ""
             soup = BeautifulSoup(resp.text, "html.parser")
             el = (
                 soup.find("div", class_=re.compile(r"show-more-less-html__markup", re.I))
@@ -204,10 +232,39 @@ def _fetch_linkedin_description(url: str) -> str:
                 or soup.find("div", id="job-details")
                 or soup.find("section", class_=re.compile(r"description", re.I))
             )
-            return el.get_text(separator="\n", strip=True)[:2500] if el else ""
+            description = el.get_text(separator="\n", strip=True)[:2500] if el else ""
+
+            # Extract posting time: prefer <time datetime="..."> then relative text
+            posted_at_iso = ""
+            time_el = soup.find("time", attrs={"datetime": True})
+            if time_el:
+                try:
+                    posted_at_iso = datetime.fromisoformat(
+                        time_el["datetime"].replace("Z", "+00:00")
+                    ).isoformat()
+                except Exception:
+                    pass
+            if not posted_at_iso:
+                rel_el = soup.find(class_=re.compile(r"posted-time-ago", re.I))
+                if rel_el:
+                    rel_text = rel_el.get_text(strip=True)
+                    m = re.search(r'(\d+)\s+(hour|day|week|month)s?\s+ago', rel_text, re.I)
+                    if m:
+                        n, unit = int(m.group(1)), m.group(2).lower()
+                        delta = {
+                            "hour": timedelta(hours=n),
+                            "day": timedelta(days=n),
+                            "week": timedelta(weeks=n),
+                            "month": timedelta(days=n * 30),
+                        }.get(unit, timedelta(0))
+                        posted_at_iso = (datetime.now(timezone.utc) - delta).isoformat()
+                    elif re.search(r'just now|moments? ago|today', rel_text, re.I):
+                        posted_at_iso = datetime.now(timezone.utc).isoformat()
+
+            return description, posted_at_iso
         except Exception:
             break
-    return ""
+    return "", ""
 
 
 
@@ -254,7 +311,11 @@ def _enrich_descriptions(jobs: list[dict]) -> list[dict]:
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             futs = {pool.submit(_fetch_linkedin_description, j["url"]): j for j in li_jobs}
             for fut in concurrent.futures.as_completed(futs):
-                futs[fut]["description"] = fut.result()
+                description, posted_at_iso = fut.result()
+                job = futs[fut]
+                job["description"] = description
+                if posted_at_iso:
+                    job["posted_at"] = posted_at_iso
 
     # Indeed: Playwright-based via jk redirect
     if indeed_jobs:
@@ -299,7 +360,7 @@ _PAY_FREQ = re.compile(
 
 # ── parsers ───────────────────────────────────────────────────────────────────
 
-def parse_linkedin_jobs(html: str) -> list[dict]:
+def parse_linkedin_jobs(html: str, email_dt: datetime | None = None) -> list[dict]:
     """Each job card has two <a> tags with the same /comm/jobs/view/{id} URL:
       - Short link: just the job title
       - Long link:  title + company + ' · ' + location (all concatenated)
@@ -331,7 +392,11 @@ def parse_linkedin_jobs(html: str) -> list[dict]:
             left, _, right = text.partition("·")
             left = left.strip()
             company = left[len(title):].strip() if left.startswith(title) else left.split()[-1]
-            location = _JUNK_SUFFIXES.sub("", right).strip().rstrip(",").strip()
+            loc = _JUNK_SUFFIXES.sub("", right).strip().rstrip(",")
+            loc = re.sub(r'\s*\(\d[^)]*\)\s*$', '', loc)  # "(123 applied)"
+            loc = re.sub(r'\s+\d+\s*\w*\s*$', '', loc)    # " 3 comp", " 21 compa", " 1"
+            loc = re.sub(r'\s*\(\s*$', '', loc)            # orphaned "("
+            location = loc.strip()
             break
 
         jobs.append({
@@ -339,8 +404,8 @@ def parse_linkedin_jobs(html: str) -> list[dict]:
             "title": title,
             "company": company,
             "location": location,
-            "url": f"https://www.linkedin.com/jobs/view/{job_id}/",
-            "posted_at": datetime.now(timezone.utc).isoformat(),
+            "url": f"https://www.linkedin.com/jobs/view/{job_id.strip('/')}/",
+            "posted_at": (email_dt or datetime.now(timezone.utc)).isoformat(),
             "description": "",
             "job_key": _make_job_key(title, company, location),
         })
@@ -348,19 +413,38 @@ def parse_linkedin_jobs(html: str) -> list[dict]:
     return jobs
 
 
-def parse_indeed_alert_jobs(html: str) -> list[dict]:
-    """Each job card has two <a> tags with the same engage.indeed.com URL:
-      - Short link: just the job title
-      - Long link:  title + ' ' + company + ' ' + rating? + ' - ' + location + salary?
+_INDEED_SKIP = re.compile(
+    r'(unsubscribe|editjobfilter|stopemails|optout|managesubscriptions|'
+    r'privacy|terms|help|login|since_yesterday|for_last)',
+    re.IGNORECASE,
+)
+
+
+def _indeed_job_url(href: str) -> str | None:
+    """Return canonical URL for an Indeed job link, or None if not a job link."""
+    if "indeed.com" not in href.lower():
+        return None
+    if _INDEED_SKIP.search(href):
+        return None
+    # Normalize: use jk= as dedup key when present
+    m = re.search(r'[?&]jk=([^&]+)', href)
+    if m:
+        return f"https://www.indeed.com/viewjob?jk={m.group(1)}"
+    return href.split("?")[0]
+
+
+def parse_indeed_alert_jobs(html: str, email_dt: datetime | None = None) -> list[dict]:
+    """Each job card has two <a> tags pointing to the same Indeed job URL.
+    Handles engage.indeed.com tracking links, r.indeed.com redirects, and
+    direct indeed.com/rc/clk?jk= links used in company-specific alert emails.
     """
     soup = BeautifulSoup(html, "html.parser")
     by_url: dict[str, list[str]] = defaultdict(list)
 
     for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "engage.indeed.com" not in href:
+        url = _indeed_job_url(a["href"])
+        if not url:
             continue
-        url = href.split("?")[0]
         text = a.get_text(separator=" ", strip=True)
         if text and not _BUTTON_TEXT.match(text):
             by_url[url].append(text)
@@ -371,12 +455,18 @@ def parse_indeed_alert_jobs(html: str) -> list[dict]:
         if not title or len(title) < 8 or _BUTTON_TEXT.match(title):
             continue
 
+        base = email_dt or datetime.now(timezone.utc)
+        posted_at = base
         company, location = "", ""
         for text in sorted(texts, key=len, reverse=True):
             if len(text) <= len(title):
                 continue
             rest = text[len(title):].strip() if text.startswith(title) else text
             rest = _SALARY.sub("", rest).strip()
+            recency_m = _RECENCY.search(rest)
+            if recency_m:
+                posted_at = _recency_tag_to_dt(recency_m.group(), base)
+            rest = _RECENCY.sub("", rest).strip()
             rest = _JUNK_SUFFIXES.sub("", rest).strip()
             if " - " in rest:
                 company_part, _, loc = rest.partition(" - ")
@@ -393,7 +483,7 @@ def parse_indeed_alert_jobs(html: str) -> list[dict]:
             "company": company,
             "location": location,
             "url": url,
-            "posted_at": datetime.now(timezone.utc).isoformat(),
+            "posted_at": posted_at.isoformat(),
             "description": "",
             "job_key": _make_job_key(title, company, location),
         })
@@ -401,7 +491,7 @@ def parse_indeed_alert_jobs(html: str) -> list[dict]:
     return jobs
 
 
-def parse_indeed_single_job(html: str) -> list[dict]:
+def parse_indeed_single_job(html: str, email_dt: datetime | None = None) -> list[dict]:
     """Single job match email from donotreply@match.indeed.com.
     Job title is link text on cts.indeed.com tracking URLs.
     Company extracted from body text: 'this {title} role at {company}'.
@@ -439,7 +529,7 @@ def parse_indeed_single_job(html: str) -> list[dict]:
             "company": company,
             "location": "",
             "url": url,
-            "posted_at": datetime.now(timezone.utc).isoformat(),
+            "posted_at": (email_dt or datetime.now(timezone.utc)).isoformat(),
             "description": "",
             "job_key": _make_job_key(title, company, ""),
         })
@@ -447,7 +537,7 @@ def parse_indeed_single_job(html: str) -> list[dict]:
     return jobs
 
 
-def parse_glassdoor_jobs(html: str) -> list[dict]:
+def parse_glassdoor_jobs(html: str, email_dt: datetime | None = None) -> list[dict]:
     """Glassdoor job alert email from noreply@glassdoor.com.
     One link per job at glassdoor.*/partner/jobListing.htm.
     Text: '{Company} {X.X ★}? {Title} {Location} {$Salary}? {Easy Apply}? {recency}?'
@@ -476,7 +566,10 @@ def parse_glassdoor_jobs(html: str) -> list[dict]:
         if not raw or len(raw) < 5:
             continue
 
-        # Strip trailing junk right to left
+        # Strip trailing junk right to left; capture recency tag for posted_at
+        base = email_dt or datetime.now(timezone.utc)
+        recency_m = _RECENCY.search(raw)
+        posted_at = _recency_tag_to_dt(recency_m.group(), base) if recency_m else base
         text = _RECENCY.sub("", raw)
         text = re.sub(r'\s*Easy Apply\s*', '', text, flags=re.IGNORECASE).strip()
         text = _SALARY.sub("", text).strip()
@@ -507,7 +600,7 @@ def parse_glassdoor_jobs(html: str) -> list[dict]:
             "company": company,
             "location": location,
             "url": url,
-            "posted_at": datetime.now(timezone.utc).isoformat(),
+            "posted_at": posted_at.isoformat(),
             "description": "",
             "job_key": _make_job_key(title, company, location),
         })
@@ -515,7 +608,7 @@ def parse_glassdoor_jobs(html: str) -> list[dict]:
     return jobs
 
 
-def parse_old_indeed_jobs(html: str) -> list[dict]:
+def parse_old_indeed_jobs(html: str, email_dt: datetime | None = None) -> list[dict]:
     """Fallback parser for legacy alert@indeed.com emails."""
     soup = BeautifulSoup(html, "html.parser")
     jobs = []
@@ -553,7 +646,7 @@ def parse_old_indeed_jobs(html: str) -> list[dict]:
             "company": company,
             "location": location,
             "url": url,
-            "posted_at": datetime.now(timezone.utc).isoformat(),
+            "posted_at": (email_dt or datetime.now(timezone.utc)).isoformat(),
             "description": "",
             "job_key": _make_job_key(title, company, location),
         })
@@ -590,17 +683,23 @@ def main():
         if not body:
             continue
 
+        ts_ms = int(msg.get("internalDate", 0))
+        email_dt = (
+            datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms
+            else datetime.now(timezone.utc)
+        )
+
         sender_lower = sender.lower()
         if "linkedin.com" in sender_lower:
-            jobs = parse_linkedin_jobs(body)
+            jobs = parse_linkedin_jobs(body, email_dt)
         elif "glassdoor.com" in sender_lower:
-            jobs = parse_glassdoor_jobs(body)
+            jobs = parse_glassdoor_jobs(body, email_dt)
         elif "match.indeed.com" in sender_lower or "donotreply@match" in sender_lower:
-            jobs = parse_indeed_single_job(body)
+            jobs = parse_indeed_single_job(body, email_dt)
         elif "jobalert.indeed.com" in sender_lower:
-            jobs = parse_indeed_alert_jobs(body)
+            jobs = parse_indeed_alert_jobs(body, email_dt)
         elif "indeed.com" in sender_lower:
-            jobs = parse_old_indeed_jobs(body)
+            jobs = parse_old_indeed_jobs(body, email_dt)
         else:
             jobs = []
 
