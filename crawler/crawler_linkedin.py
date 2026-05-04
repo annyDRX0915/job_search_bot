@@ -410,7 +410,22 @@ def linkedin_login(page) -> bool:
         return False
 
     time.sleep(0.5)
-    page.click("button[type='submit']")
+    submitted = False
+    for sel in [
+        "button[type='submit']",
+        "button[data-litms-control-urn='login-submit']",
+        "button.btn__primary--large",
+        "[aria-label='Sign in']",
+    ]:
+        try:
+            page.click(sel, timeout=4000)
+            submitted = True
+            break
+        except Exception:
+            continue
+    if not submitted:
+        # Pressing Enter on the password field always submits the login form
+        page.locator("input[type='password']").press("Enter")
 
     try:
         page.wait_for_url(lambda u: "linkedin.com/login" not in u, timeout=15000)
