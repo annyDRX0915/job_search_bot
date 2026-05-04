@@ -392,20 +392,21 @@ def linkedin_login(page) -> bool:
 
     time.sleep(0.5)
 
-    # Fill password
-    pwd_filled = False
+    # Fill password — track the working locator so we can press Enter on it
+    pwd_locator = None
     for sel in ["input[autocomplete='current-password']", "input[type='password']"]:
         for nth in range(3):
             try:
-                page.locator(sel).nth(nth).fill(password, timeout=2000)
+                loc = page.locator(sel).nth(nth)
+                loc.fill(password, timeout=2000)
                 print(f"  Password filled via {sel}[{nth}]")
-                pwd_filled = True
+                pwd_locator = loc
                 break
             except Exception:
                 continue
-        if pwd_filled:
+        if pwd_locator:
             break
-    if not pwd_filled:
+    if not pwd_locator:
         print("  ! Could not fill password field")
         return False
 
@@ -424,8 +425,7 @@ def linkedin_login(page) -> bool:
         except Exception:
             continue
     if not submitted:
-        # Pressing Enter on the password field always submits the login form
-        page.locator("input[type='password']").press("Enter")
+        pwd_locator.press("Enter")
 
     try:
         page.wait_for_url(lambda u: "linkedin.com/login" not in u, timeout=15000)
