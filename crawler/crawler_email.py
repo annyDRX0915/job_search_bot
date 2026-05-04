@@ -344,7 +344,7 @@ def _fetch_indeed_descriptions_pw(jobs: list[dict]) -> None:
 def _enrich_descriptions(jobs: list[dict]) -> list[dict]:
     """Fetch descriptions for all parseable sources; mutates jobs in-place."""
     li_jobs = [j for j in jobs if j["source"] == "email_linkedin" and not j.get("description")]
-    indeed_jobs = [j for j in jobs if j["source"] in ("email_indeed_alert", "email_indeed_single")]
+    indeed_jobs = [j for j in jobs if j["source"] in ("email_indeed_alert", "email_indeed_single") and not j.get("description")]
 
     # LinkedIn: requests-based, throttled to avoid 429
     if li_jobs:
@@ -454,6 +454,39 @@ def parse_linkedin_jobs(html: str, email_dt: datetime | None = None) -> list[dic
     return jobs
 
 
+def _email_snippet(anchor) -> str:
+    """Extract non-link text from the job card container of an <a> tag.
+
+    Indeed alert emails embed a short description snippet in the card HTML
+    alongside the title/company/location links. We collect text from the
+    nearest <td> or <div> parent, skipping all <a> tag text so we don't
+    double-capture title/company/location.
+    """
+    from bs4 import NavigableString, Tag
+
+    def _text_excluding_links(el) -> list[str]:
+        parts = []
+        for child in el.children:
+            if isinstance(child, NavigableString):
+                t = str(child).strip()
+                if t:
+                    parts.append(t)
+            elif isinstance(child, Tag) and child.name != "a":
+                parts.extend(_text_excluding_links(child))
+        return parts
+
+    container = anchor.find_parent(["td", "div"])
+    if not container:
+        return ""
+    parts = _text_excluding_links(container)
+    snippet = " ".join(parts).strip()
+    # Skip if it's just noise (salary/recency only, very short, etc.)
+    snippet = _SALARY.sub("", snippet).strip()
+    snippet = _RECENCY.sub("", snippet).strip()
+    snippet = _PAY_FREQ.sub("", snippet).strip()
+    return snippet[:600] if len(snippet) > 20 else ""
+
+
 _INDEED_SKIP = re.compile(
     r'(unsubscribe|editjobfilter|stopemails|optout|managesubscriptions|'
     r'privacy|terms|help|login|since_yesterday|for_last)',
@@ -481,6 +514,7 @@ def parse_indeed_alert_jobs(html: str, email_dt: datetime | None = None) -> list
     """
     soup = BeautifulSoup(html, "html.parser")
     by_url: dict[str, list[str]] = defaultdict(list)
+    first_anchor: dict[str, object] = {}
 
     for a in soup.find_all("a", href=True):
         url = _indeed_job_url(a["href"])
@@ -489,6 +523,8 @@ def parse_indeed_alert_jobs(html: str, email_dt: datetime | None = None) -> list
         text = a.get_text(separator=" ", strip=True)
         if text and not _BUTTON_TEXT.match(text):
             by_url[url].append(text)
+        if url not in first_anchor:
+            first_anchor[url] = a
 
     jobs = []
     for url, texts in by_url.items():
@@ -518,6 +554,7 @@ def parse_indeed_alert_jobs(html: str, email_dt: datetime | None = None) -> list
                 company = _RATING_SUFFIX.sub("", rest).strip()
             break
 
+        snippet = _email_snippet(first_anchor[url]) if url in first_anchor else ""
         jobs.append({
             "source": "email_indeed_alert",
             "title": title,
@@ -525,7 +562,7 @@ def parse_indeed_alert_jobs(html: str, email_dt: datetime | None = None) -> list
             "location": location,
             "url": url,
             "posted_at": posted_at.isoformat(),
-            "description": "",
+            "description": snippet,
             "job_key": _make_job_key(title, company, location),
         })
 
@@ -571,7 +608,7 @@ def parse_indeed_single_job(html: str, email_dt: datetime | None = None) -> list
             "location": "",
             "url": url,
             "posted_at": (email_dt or datetime.now(timezone.utc)).isoformat(),
-            "description": "",
+            "description": _email_snippet(a),
             "job_key": _make_job_key(title, company, ""),
         })
 
