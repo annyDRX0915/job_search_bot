@@ -310,24 +310,34 @@ def _fetch_indeed_descriptions_pw(jobs: list[dict]) -> None:
     if not still_missing:
         return
 
-    # Pass 2: Playwright headless=False for JS-rendered or blocked pages
-    print(f"  Fetching {len(still_missing)} Indeed descriptions via Playwright...")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        for job in still_missing:
-            ctx = browser.new_context(user_agent=_REQ_HEADERS["User-Agent"])
-            page = ctx.new_page()
-            try:
-                page.goto(job["url"], wait_until="networkidle", timeout=25000)
-                el = page.query_selector("#jobDescriptionText")
-                if el:
-                    job["description"] = el.inner_text()[:2500]
-            except Exception:
-                pass
-            finally:
-                ctx.close()
-            _time.sleep(0.5)
-        browser.close()
+    # Pass 2: Playwright fallback — headed locally, headless in CI
+    _in_ci = bool(os.getenv("CI"))
+    print(f"  Fetching {len(still_missing)} Indeed descriptions via Playwright (headless={_in_ci})...")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=_in_ci,
+                args=["--disable-blink-features=AutomationControlled"] if _in_ci else [],
+            )
+            for job in still_missing:
+                ctx = browser.new_context(
+                    user_agent=_REQ_HEADERS["User-Agent"],
+                    viewport={"width": 1280, "height": 800},
+                )
+                page = ctx.new_page()
+                try:
+                    page.goto(job["url"], wait_until="networkidle", timeout=25000)
+                    el = page.query_selector("#jobDescriptionText")
+                    if el:
+                        job["description"] = el.inner_text()[:2500]
+                except Exception:
+                    pass
+                finally:
+                    ctx.close()
+                _time.sleep(0.5)
+            browser.close()
+    except Exception as e:
+        print(f"  Playwright Indeed fetch failed ({e}); continuing without descriptions")
 
 
 def _enrich_descriptions(jobs: list[dict]) -> list[dict]:
