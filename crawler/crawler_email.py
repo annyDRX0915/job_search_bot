@@ -310,15 +310,16 @@ def _fetch_indeed_descriptions_pw(jobs: list[dict]) -> None:
     if not still_missing:
         return
 
-    # Pass 2: Playwright fallback — headed locally, headless in CI
-    _in_ci = bool(os.getenv("CI"))
-    print(f"  Fetching {len(still_missing)} Indeed descriptions via Playwright (headless={_in_ci})...")
+    # CI: Indeed blocks headless Playwright same as requests; skip to avoid ~28min timeout burn
+    if os.getenv("CI"):
+        print(f"  CI: skipping Playwright Indeed fallback ({len(still_missing)} jobs will have no description)")
+        return
+
+    # Pass 2: Playwright fallback — headed browser locally only
+    print(f"  Fetching {len(still_missing)} Indeed descriptions via Playwright...")
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=_in_ci,
-                args=["--disable-blink-features=AutomationControlled"] if _in_ci else [],
-            )
+            browser = p.chromium.launch(headless=False)
             for job in still_missing:
                 ctx = browser.new_context(
                     user_agent=_REQ_HEADERS["User-Agent"],
