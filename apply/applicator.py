@@ -538,7 +538,11 @@ def _apply_answer(frame, q: dict, answer: str):
                  if label.lower()[:20] in i.evaluate(_LABEL_JS).lower()), None
             )
             if inp and inp.count() > 0:
+                inp.click()
                 inp.fill(answer)
+                # Dispatch input+change so React/Vue controlled components pick up the value
+                inp.dispatch_event("input")
+                inp.dispatch_event("change")
         except Exception:
             pass
 
@@ -1011,7 +1015,6 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                     new_page.wait_for_load_state("domcontentloaded", timeout=15000)
                     time.sleep(2)
                     print(f"  → Opened new tab: {new_page.url[:80]}")
-                    # Detect redirect back to LinkedIn (not the original job page) — bail out
                     if "linkedin.com" in new_page.url and "/jobs/view/" not in new_page.url:
                         new_page.close()
                         return "skipped", f"External apply redirected back to LinkedIn ({new_page.url[:80]})"
@@ -1038,9 +1041,29 @@ def apply_linkedin(page: Page, job: dict, profile: dict, _allow_new_tab: bool = 
                     return apply_generic(page, job, profile, already_navigated=True)
                 else:
                     try:
-                        with page.expect_navigation(wait_until="domcontentloaded", timeout=15000):
-                            ext.click()
+                        # jobs-tracker: LinkedIn opens external URL in a new tab via JS
+                        with page.context.expect_page(timeout=8000) as new_page_info:
+                            try:
+                                with page.expect_navigation(wait_until="domcontentloaded", timeout=8000):
+                                    ext.click()
+                            except Exception:
+                                pass
+                        new_page = new_page_info.value
+                        new_page.wait_for_load_state("domcontentloaded", timeout=15000)
+                        time.sleep(2)
+                        print(f"  → Opened new tab: {new_page.url[:80]}")
+                        if _is_bot_blocked(new_page):
+                            ext_url = new_page.url
+                            new_page.close()
+                            return apply_manual(page, ext_url or href, job, profile)
+                        if "linkedin.com/jobs/view/" in new_page.url:
+                            result = apply_linkedin(new_page, job, profile, _allow_new_tab=False)
+                        else:
+                            result = apply_generic(new_page, job, profile, already_navigated=True)
+                        new_page.close()
+                        return result
                     except Exception:
+                        # No new tab opened — check where the current page landed
                         pass
                     time.sleep(2)
                     print(f"  → Landed on: {page.url[:80]}")

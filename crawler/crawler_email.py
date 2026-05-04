@@ -268,11 +268,27 @@ def _fetch_linkedin_description(url: str) -> tuple[str, str]:
 
 
 
-def _fetch_indeed_descriptions_pw(jobs: list[dict]) -> None:
-    """Fetch Indeed job descriptions via Playwright using the original tracking URLs.
+def _fetch_indeed_description_requests(url: str) -> str:
+    """Fetch Indeed job description via requests; follows cts.indeed.com redirects."""
+    try:
+        resp = _REQ_SESSION.get(url, timeout=12, allow_redirects=True)
+        if resp.status_code != 200:
+            return ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        el = soup.find(id="jobDescriptionText")
+        if el:
+            return el.get_text(separator="\n", strip=True)[:2500]
+    except Exception:
+        pass
+    return ""
 
-    Fresh context per URL is required: engage.indeed.com tracking links are single-use,
-    and sharing a browser context causes 'Security Check' blocks after the first hit.
+
+def _fetch_indeed_descriptions_pw(jobs: list[dict]) -> None:
+    """Fetch Indeed job descriptions — requests first, Playwright fallback.
+
+    requests works for canonical viewjob?jk= URLs and follows cts.indeed.com
+    redirects. Playwright (headless=False) covers any that requests can't fetch
+    due to JS-gated content or security checks.
     """
     from playwright.sync_api import sync_playwright
 
@@ -282,14 +298,27 @@ def _fetch_indeed_descriptions_pw(jobs: list[dict]) -> None:
     if not indeed_jobs:
         return
 
-    print(f"  Fetching {len(indeed_jobs)} Indeed descriptions via Playwright...")
+    # Pass 1: requests (fast, no bot detection)
+    print(f"  Fetching {len(indeed_jobs)} Indeed descriptions via requests...")
+    for job in indeed_jobs:
+        desc = _fetch_indeed_description_requests(job["url"])
+        if desc:
+            job["description"] = desc
+        _time.sleep(0.3)
+
+    still_missing = [j for j in indeed_jobs if not j.get("description")]
+    if not still_missing:
+        return
+
+    # Pass 2: Playwright headless=False for JS-rendered or blocked pages
+    print(f"  Fetching {len(still_missing)} Indeed descriptions via Playwright...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        for job in indeed_jobs:
+        browser = p.chromium.launch(headless=False)
+        for job in still_missing:
             ctx = browser.new_context(user_agent=_REQ_HEADERS["User-Agent"])
             page = ctx.new_page()
             try:
-                page.goto(job["url"], wait_until="domcontentloaded", timeout=20000)
+                page.goto(job["url"], wait_until="networkidle", timeout=25000)
                 el = page.query_selector("#jobDescriptionText")
                 if el:
                     job["description"] = el.inner_text()[:2500]
@@ -297,6 +326,7 @@ def _fetch_indeed_descriptions_pw(jobs: list[dict]) -> None:
                 pass
             finally:
                 ctx.close()
+            _time.sleep(0.5)
         browser.close()
 
 
