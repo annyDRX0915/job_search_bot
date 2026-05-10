@@ -82,7 +82,7 @@ def _oai() -> OpenAI:
 # ── Apple Calendar (iCloud CalDAV) ────────────────────────────────────────────
 
 def _caldav_calendar():
-    """Connect to iCloud CalDAV and return the primary calendar, or None on failure."""
+    """Connect to iCloud CalDAV and return the configured calendar by name."""
     username = os.getenv("ICLOUD_USERNAME")
     password = os.getenv("ICLOUD_APP_PASSWORD")
     if not username or not password:
@@ -90,6 +90,8 @@ def _caldav_calendar():
         return None
     try:
         import caldav
+        from utils.filters import calendar_name
+        target = calendar_name()
         client = caldav.DAVClient(
             url="https://caldav.icloud.com",
             username=username,
@@ -99,6 +101,15 @@ def _caldav_calendar():
         if not calendars:
             print("  No calendars found in iCloud account")
             return None
+        for cal in calendars:
+            try:
+                if cal.get_display_name() == target:
+                    print(f"  Using calendar: {target}")
+                    return cal
+            except Exception:
+                continue
+        print(f"  Calendar '{target}' not found — available: {[c.get_display_name() for c in calendars]}")
+        print(f"  Falling back to first calendar")
         return calendars[0]
     except Exception as e:
         print(f"  iCloud CalDAV connect failed: {e}")

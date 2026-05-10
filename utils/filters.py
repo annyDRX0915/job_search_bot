@@ -74,3 +74,6 @@ def top_n() -> int:
 
 def assessment_reminder_hours() -> int:
     return _load().get("calendar", {}).get("assessment_reminder_hours", 24)
+
+def calendar_name() -> str:
+    return _load().get("calendar", {}).get("calendar_name", "个人")
