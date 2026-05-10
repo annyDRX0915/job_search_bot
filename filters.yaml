@@ -319,6 +319,6 @@ output:
 # ── calendar ──────────────────────────────────────────────────────────────────
 calendar:
   # Apple Calendar name to add events to (must match exactly)
-  calendar_name: 个人
+  calendar_name: Job_Search
   # Hours before an assessment deadline to place the reminder event
   assessment_reminder_hours: 24
