@@ -23,6 +23,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 _USE_SHEETS = bool(os.getenv("SPREADSHEET_ID"))
 if _USE_SHEETS:
     from utils.gsheets import write_sheet
+from utils.filters import (
+    company_blocklist as _cf_blocklist,
+    title_allowed as _cf_title_allowed,
+    title_excluded as _cf_title_excl,
+    phd_patterns as _cf_phd,
+    senior_phrases as _cf_senior,
+    experience_max_years as _cf_max_yrs,
+    linkedin_locations as _cf_li_locs,
+    linkedin_time_range as _cf_li_time,
+)
 
 KEYWORDS = [
     "machine learning engineer",
@@ -38,78 +48,11 @@ KEYWORDS = [
     "research scientist",
 ]
 
-LOCATIONS = [
-    "Canada",
-    # "United States",
-]
-
-# r86400 = 24h, r604800 = 7d, r2592000 = 30d
-TIME_RANGE = "r86400"
-
-# Companies that are gig/task-based or part-time platforms
-COMPANY_BLOCKLIST = {
-    "mercor",
-    "dataannotation",
-    "data annotation",
-    "outlier",
-    "appen",
-    "scale ai",  # task annotation work
-    "remotasks",
-    "lionbridge",
-    "telus international",
-    "taskus",
-    "clickworker",
-    "alignerr",
-    "Jobs Ai",
-}
-
-TITLE_KEYWORDS = [
-    "machine learning",
-    "ml engineer",
-    "data scientist",
-    "data science",
-    "ai engineer",
-    "artificial intelligence",
-    "applied scientist",
-    "applied ml",
-    "software engineer",
-    "software developer",
-    "sde",
-    "swe",
-    "forward deployed",
-    "nlp",
-    "computer vision",
-    "deep learning",
-    "research engineer",
-    "research scientist",
-    "platform engineer",
-    "backend engineer",
-    "full stack engineer",
-    "fullstack engineer",
-]
-
-TITLE_EXCLUDE = [
-    "senior",
-    "sr.",
-    " sr ",
-    "sr ",
-    "staff",
-    "principal",
-    "director",
-    "manager",
-    "vice president",
-    " vp ",
-    "head of",
-    "lead ",
-    " lead",
-    # "intern",
-    # "internship",
-    "student",
-    "co-op",
-    "coop",
-    "distinguished",
-    "fellow",
-]
+LOCATIONS      = _cf_li_locs()
+TIME_RANGE     = _cf_li_time()
+COMPANY_BLOCKLIST = _cf_blocklist()
+TITLE_KEYWORDS = _cf_title_allowed()
+TITLE_EXCLUDE  = _cf_title_excl()
 
 
 def is_relevant(title: str) -> bool:
@@ -127,7 +70,9 @@ def is_blocked_company(company: str) -> bool:
 
 _YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:to\s*\d+\s*)?years?", re.IGNORECASE)
 
-PHD_PATTERNS = ["ph.d", "phd", "doctorate", "doctoral degree"]
+PHD_PATTERNS   = _cf_phd()
+SENIOR_PHRASES = _cf_senior()
+_MAX_YEARS     = _cf_max_yrs()
 
 
 def is_entry_level(title: str) -> bool:
@@ -139,21 +84,13 @@ def is_entry_level(title: str) -> bool:
 
 def is_entry_level_description(description: str, title: str = "") -> bool:
     if not description:
-        # No description fetched — fall back to title-only check
-        # If title already passed is_entry_level(), allow it through
         return True
     d = description.lower()
     if any(p in d for p in PHD_PATTERNS):
         return False
     for match in _YEARS_RE.finditer(d):
-        if int(match.group(1)) >= 5:  # exclude 5+ years (was > 5, missed "5 years"/"5+ years")
+        if int(match.group(1)) >= _MAX_YEARS:
             return False
-    # Catch senior-level language in description even if title looked fine
-    SENIOR_PHRASES = [
-        "5+ years", "6+ years", "7+ years", "8+ years",
-        "senior engineer", "senior developer", "senior scientist",
-        "lead engineer", "staff engineer", "principal engineer",
-    ]
     if any(p in d for p in SENIOR_PHRASES):
         return False
     return True

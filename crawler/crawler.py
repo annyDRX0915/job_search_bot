@@ -17,6 +17,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 _USE_SHEETS = bool(os.getenv("SPREADSHEET_ID"))
 if _USE_SHEETS:
     from utils.gsheets import write_sheet
+from utils.filters import (
+    company_blocklist as _cf_blocklist,
+    location_keywords as _cf_loc_kw,
+    title_allowed as _cf_title_allowed,
+    title_excluded as _cf_title_excl,
+    phd_patterns as _cf_phd,
+    experience_max_years as _cf_max_yrs,
+)
 
 
 def _make_job_key(title: str, company: str, location: str) -> str:
@@ -38,53 +46,8 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; job-crawler/1.0)"
 }
 
-COMPANY_BLOCKLIST = {
-    "mercor",
-    "dataannotation",
-    "data annotation",
-    "outlier",
-    "appen",
-    "remotasks",
-    "lionbridge",
-    "telus international",
-    "taskus",
-    "clickworker",
-    "alignerr",
-}
-
-LOCATION_KEYWORDS = [
-    "canada",
-    "remote",  # include remote since they're often open to CA/US
-    # Canadian cities/provinces
-    "toronto",
-    "vancouver",
-    "montreal",
-    "ottawa",
-    "calgary",
-    "ontario",
-    "british columbia",
-    "alberta",
-    "quebec",
-    # USA
-    "united states",
-    "usa",
-    "u.s.",
-    "new york",
-    "san francisco",
-    "seattle",
-    "boston",
-    "chicago",
-    "los angeles",
-    "austin",
-    "denver",
-    "atlanta",
-    "california",
-    "washington",
-    "new york",
-    "texas",
-    "massachusetts",
-    "illinois",
-]
+COMPANY_BLOCKLIST = _cf_blocklist()
+LOCATION_KEYWORDS = _cf_loc_kw()
 
 
 def is_blocked_company(company: str) -> bool:
@@ -115,83 +78,26 @@ def is_in_region(location: str) -> bool:
     return any(kw in lower for kw in LOCATION_KEYWORDS)
 
 
-TITLE_KEYWORDS = [
-    "machine learning",
-    "ml engineer",
-    "data scientist",
-    "data science",
-    "ai engineer",
-    "artificial intelligence",
-    "applied scientist",
-    "applied ml",
-    "software engineer",
-    "software developer",
-    "sde",
-    "swe",
-    "forward deployed",
-    "nlp",
-    "computer vision",
-    "deep learning",
-    "research engineer",
-    "research scientist",
-    "platform engineer",
-    "backend engineer",
-    "full stack engineer",
-    "fullstack engineer",
-]
-
-
-TITLE_EXCLUDE = [
-    "senior",
-    "sr.",
-    " sr ",
-    "sr ",
-    "staff",
-    "principal",
-    "director",
-    "manager",
-    "vice president",
-    " vp ",
-    "head of",
-    "lead ",
-    " lead",
-    "intern",
-    "internship",
-    "co-op",
-    "coop",
-    "distinguished",
-    "fellow",
-]
+TITLE_KEYWORDS = _cf_title_allowed()
+TITLE_EXCLUDE  = _cf_title_excl()
+PHD_PATTERNS   = _cf_phd()
+_MAX_YEARS     = _cf_max_yrs()
 
 # Matches "6+ years", "7 years", "8-10 years", etc. in description
 _YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:to\s*\d+\s*)?years?", re.IGNORECASE)
-
-PHD_PATTERNS = [
-    "ph.d",
-    "phd",
-    "doctorate",
-    "doctoral degree",
-]
 
 
 def is_entry_level(title: str, description: str) -> bool:
     t = (title or "").lower()
     d = (description or "").lower()
 
-    # Exclude by title
     if any(kw in t for kw in TITLE_EXCLUDE):
         return False
-
-    # Exclude if description requires a PhD
     if any(p in d for p in PHD_PATTERNS):
         return False
-
-    # Exclude if description mentions more than 5 years of experience
     for match in _YEARS_RE.finditer(d):
-        years = int(match.group(1))
-        if years > 5:
+        if int(match.group(1)) > _MAX_YEARS:
             return False
-
     return True
 
 

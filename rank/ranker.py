@@ -21,6 +21,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 _USE_SHEETS = bool(os.getenv("SPREADSHEET_ID"))
 if _USE_SHEETS:
     from utils.gsheets import read_sheet, write_sheet
+from utils.filters import (
+    company_blocklist as _cf_blocklist,
+    company_tier1 as _cf_tier1,
+    company_tier2 as _cf_tier2,
+    ineligible_locations as _cf_ineligible,
+    location_score_tiers as _cf_loc_tiers,
+    location_fallback_scores as _cf_loc_fallback,
+    scoring_weights as _cf_weights,
+    scoring_keywords as _cf_keywords,
+    top_n as _cf_top_n,
+)
 
 
 def _make_job_key(title: str, company: str, location: str) -> str:
@@ -33,7 +44,7 @@ JOBS_CSV        = "jobs.csv"
 LINKEDIN_CSV    = "linkedin_jobs.csv"
 APPLIED_LOG     = "apply/applied_log.csv"
 OUTPUT_CSV      = "ranked_jobs.csv"
-TOP_N           = 50
+TOP_N           = _cf_top_n()
 
 # ── salary filter ─────────────────────────────────────────────────────────────
 # Per-currency senior thresholds. Add a new entry here when adding a new country.
@@ -118,27 +129,19 @@ def _salary_too_high(description: str, location: str) -> bool:
             return True
     return False
 
-# ── ranker-level blocklist (spam recruiters, gig platforms) ───────────────────
-COMPANY_BLOCKLIST = {
-    "great value hiring",
-    "turing",           # gig-style "remote engineer" platform
-    "alignerr",
-}
-
-# ── locations that indicate ineligible work jurisdiction ─────────────────────
-INELIGIBLE_LOCATION_TERMS = [
-    "india", "uk", "united kingdom", "london", "bangalore", "hyderabad",
-    "mumbai", "delhi", "berlin", "germany", "australia", "sydney",
-    "singapore", "ireland", "dublin", "france", "paris", "netherlands",
-    "amsterdam", "poland", "warsaw",
-]
+# ── filter lists from filters.yaml ───────────────────────────────────────────
+COMPANY_BLOCKLIST       = _cf_blocklist()
+INELIGIBLE_LOCATION_TERMS = _cf_ineligible()
+_LOC_SCORE_TIERS        = _cf_loc_tiers()
+_LOC_FALLBACK           = _cf_loc_fallback()
 
 # ── scoring weights ───────────────────────────────────────────────────────────
-W_TITLE     = 30
-W_COMPANY   = 25
-W_LOCATION  = 20
-W_RECENCY   = 15
-W_KEYWORDS  = 10
+_W = _cf_weights()
+W_TITLE    = _W["title"]
+W_COMPANY  = _W["company"]
+W_LOCATION = _W["location"]
+W_RECENCY  = _W["recency"]
+W_KEYWORDS = _W["keywords"]
 
 # ── title scoring ─────────────────────────────────────────────────────────────
 TITLE_SCORES = [
@@ -158,20 +161,8 @@ def score_title(title: str) -> int:
     return 5  # generic match from crawler filter
 
 # ── company tier scoring ──────────────────────────────────────────────────────
-TIER1 = {
-    "google", "deepmind", "google deepmind", "meta", "apple", "amazon", "aws",
-    "microsoft", "netflix", "openai", "anthropic", "nvidia", "databricks",
-    "hugging face", "cohere", "stability ai", "scale ai",
-}
-TIER2 = {
-    "stripe", "shopify", "uber", "airbnb", "lyft", "twitter", "x corp",
-    "linkedin", "salesforce", "twilio", "datadog", "snowflake", "palantir",
-    "confluent", "elastic", "mongodb", "cloudflare", "figma", "notion",
-    "asana", "zendesk", "okta", "pagerduty", "hashicorp", "wealthsimple",
-    "rbc", "td bank", "bmo", "scotiabank", "cibc", "desjardins",
-    "rogers", "telus", "bell", "cgi", "sap", "servicenow",
-    "intuit", "autodesk", "hootsuite", "d2l", "wish",
-}
+TIER1 = _cf_tier1()
+TIER2 = _cf_tier2()
 
 def score_company(company: str) -> int:
     c = company.lower().strip()
@@ -182,20 +173,18 @@ def score_company(company: str) -> int:
     return 10  # unknown — still worth applying
 
 # ── location scoring ──────────────────────────────────────────────────────────
-CANADA_TERMS = [
-    "canada", "toronto", "vancouver", "montreal", "ottawa", "calgary",
-    "ontario", "british columbia", "alberta", "quebec", "waterloo",
-]
-
 def score_location(location: str) -> int:
     if not location:
-        return 3
+        return _LOC_FALLBACK["unknown"]
     loc = location.lower()
-    if any(t in loc for t in CANADA_TERMS):
-        return 30
+    for tier in _LOC_SCORE_TIERS:
+        if any(t in loc for t in tier["terms"]):
+            return tier["score"]
     if "remote" in loc:
-        return 5   # remote with no Canada mention — likely US-based
-    return 0  # US-only
+        return _LOC_FALLBACK["remote"]
+    if any(us in loc for us in ["united states", "usa", "u.s.", " us "]):
+        return _LOC_FALLBACK["us_only"]
+    return _LOC_FALLBACK["unknown"]
 
 # ── recency scoring ───────────────────────────────────────────────────────────
 def score_recency(posted_at) -> int:
@@ -221,11 +210,7 @@ def score_recency(posted_at) -> int:
         return 5
 
 # ── description keyword scoring ───────────────────────────────────────────────
-KEYWORDS = [
-    "llm", "large language model", "rag", "retrieval", "agent",
-    "transformer", "pytorch", "fine-tun", "embedding", "vector",
-    "diffusion", "generative", "reinforcement learning",
-]
+KEYWORDS = _cf_keywords()
 
 def score_keywords(desc: str) -> int:
     if not desc:
@@ -272,11 +257,11 @@ def ai_rerank(jobs: pd.DataFrame) -> pd.DataFrame:
 
     prompt = (
         "You are ranking job opportunities for a new grad (0–2 years experience) "
-        "seeking ML/AI/data science or SWE roles in Canada (preferred) or remote.\n\n"
+        "seeking ML/AI/data science or SWE roles in Canada, Singapore, Malaysia, China, or remote.\n\n"
         f"Recent application history (applied vs skipped — learn from patterns):\n{history_block}\n\n"
         "Rank the jobs below. Prefer:\n"
         "- ML/AI/data science > generic SWE\n"
-        "- Canada locations > remote > US-only\n"
+        "- Canada > Singapore > Malaysia/China > remote > US-only\n"
         "- Strong companies and specific roles over vague catch-all postings\n"
         "- Patterns from the history above (if certain companies/titles were always skipped, score them lower)\n\n"
         f"Jobs:\n{jobs_block}\n\n"

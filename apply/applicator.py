@@ -1217,6 +1217,8 @@ def main():
 
         try:
             for i, job in enumerate(pending):
+                if page.is_closed():
+                    page = context.new_page()
                 url, company, title, source = job.get("url",""), job.get("company",""), job.get("title",""), job.get("source","")
                 location = job.get("location", "")
                 ats = detect_ats(url)
@@ -1240,7 +1242,8 @@ def main():
                 counts[status] = counts.get(status, 0) + 1
                 time.sleep(2)
         finally:
-            page.close()
+            if not page.is_closed():
+                page.close()
             if not cdp_mode:
                 browser.close()
 

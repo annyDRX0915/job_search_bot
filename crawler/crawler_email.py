@@ -118,37 +118,27 @@ def _is_recent(posted_at: str, hours: int = 48) -> bool:
         return True
 
 
-# ── job filters (mirrors crawler_linkedin.py) ─────────────────────────────────
+# ── job filters (loaded from filters.yaml) ────────────────────────────────────
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).parent.parent))
+from utils.filters import (
+    company_blocklist as _cf_blocklist,
+    title_allowed as _cf_title_allowed,
+    title_excluded as _cf_title_excl,
+    phd_patterns as _cf_phd,
+    senior_phrases as _cf_senior,
+    experience_max_years as _cf_max_yrs,
+    recency_hours as _cf_recency_hours,
+)
 
-_COMPANY_BLOCKLIST = {
-    "mercor", "dataannotation", "data annotation", "outlier", "appen",
-    "scale ai", "remotasks", "lionbridge", "telus international",
-    "taskus", "clickworker", "alignerr", "jobs ai",
-}
-
-_TITLE_KEYWORDS = [
-    "machine learning", "ml engineer", "data scientist", "data science",
-    "ai engineer", "artificial intelligence", "applied scientist", "applied ml",
-    "software engineer", "software developer", "sde", "swe",
-    "forward deployed", "nlp", "computer vision", "deep learning",
-    "research engineer", "research scientist", "platform engineer",
-    "backend engineer", "full stack engineer", "fullstack engineer",
-    "gen ai", "generative ai", "llm",
-]
-
-_TITLE_EXCLUDE = [
-    "senior", "sr.", " sr ", "sr ", "staff", "principal", "director",
-    "manager", "vice president", " vp ", "head of", "lead ", " lead",
-    "student", "co-op", "coop", "distinguished", "fellow",
-]
-
+_COMPANY_BLOCKLIST = _cf_blocklist()
+_TITLE_KEYWORDS    = _cf_title_allowed()
+_TITLE_EXCLUDE     = _cf_title_excl()
 _YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:to\s*\d+\s*)?years?", re.IGNORECASE)
-_PHD_PATTERNS = ["ph.d", "phd", "doctorate", "doctoral degree"]
-_SENIOR_PHRASES = [
-    "5+ years", "6+ years", "7+ years", "8+ years",
-    "senior engineer", "senior developer", "senior scientist",
-    "lead engineer", "staff engineer", "principal engineer",
-]
+_PHD_PATTERNS   = _cf_phd()
+_SENIOR_PHRASES = _cf_senior()
+_MAX_YEARS      = _cf_max_yrs()
 
 
 def _is_relevant(title: str) -> bool:
@@ -170,7 +160,7 @@ def _passes_description_filter(description: str) -> bool:
     if any(p in d for p in _SENIOR_PHRASES):
         return False
     for m in _YEARS_RE.finditer(d):
-        if int(m.group(1)) >= 5:
+        if int(m.group(1)) >= _MAX_YEARS:
             return False
     return True
 
@@ -184,7 +174,7 @@ def _apply_filters(jobs: list[dict]) -> list[dict]:
     before = len(jobs)
     kept = []
     for j in jobs:
-        if not _is_recent(j.get("posted_at", ""), hours=120):
+        if not _is_recent(j.get("posted_at", ""), hours=_cf_recency_hours("email")):
             continue
         if not _is_relevant(j["title"]):
             continue

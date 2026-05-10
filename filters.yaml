@@ -1,0 +1,317 @@
+# filters.yaml — single source of truth for all job search filters.
+# Edit here; no need to touch individual crawlers, ranker, or agents.
+
+# ── locations ─────────────────────────────────────────────────────────────────
+locations:
+  # Keywords matched against job location strings by crawler.py
+  allowed:
+    - remote
+    # Canada
+    - canada
+    - toronto
+    - vancouver
+    - montreal
+    - ottawa
+    - calgary
+    - ontario
+    - british columbia
+    - alberta
+    - quebec
+    # USA
+    - united states
+    - usa
+    - "u.s."
+    - new york
+    - san francisco
+    - seattle
+    - boston
+    - chicago
+    - los angeles
+    - austin
+    - denver
+    - atlanta
+    - california
+    - washington
+    - texas
+    - massachusetts
+    - illinois
+    # Singapore
+    - singapore
+    # Malaysia
+    - malaysia
+    - kuala lumpur
+    - penang
+    # China
+    - china
+    - beijing
+    - shanghai
+    - shenzhen
+    - guangzhou
+
+  # LinkedIn search targets (crawler_linkedin.py LOCATIONS list)
+  linkedin_search:
+    - Canada
+    - Singapore
+    - Malaysia
+    - China
+    # - United States
+
+  # Jobs in these locations are dropped by the ranker
+  ineligible:
+    - india
+    - united kingdom
+    - london
+    - bangalore
+    - hyderabad
+    - mumbai
+    - delhi
+    - berlin
+    - germany
+    - australia
+    - sydney
+    - ireland
+    - dublin
+    - france
+    - paris
+    - netherlands
+    - amsterdam
+    - poland
+    - warsaw
+
+  # Scoring tiers used by ranker.py score_location()
+  # Tiers are checked in order; first match wins.
+  score_tiers:
+    - name: canada
+      terms: [canada, toronto, vancouver, montreal, ottawa, calgary,
+              ontario, british columbia, alberta, quebec, waterloo]
+      score: 30
+    - name: singapore
+      terms: [singapore]
+      score: 25
+    - name: malaysia
+      terms: [malaysia, kuala lumpur, penang]
+      score: 20
+    - name: china
+      terms: [china, beijing, shanghai, shenzhen, guangzhou]
+      score: 18
+    - name: usa
+      terms: [united states, usa, "u.s.", new york, san francisco, seattle,
+              boston, chicago, los angeles, austin, denver, atlanta,
+              california, washington, texas, massachusetts, illinois]
+      score: 25
+    # "remote" and fallbacks are handled in code, not here
+
+# ── title filters ─────────────────────────────────────────────────────────────
+titles:
+  allowed:
+    - machine learning
+    - ml engineer
+    - data scientist
+    - data science
+    - ai engineer
+    - artificial intelligence
+    - applied scientist
+    - applied ml
+    - software engineer
+    - software developer
+    - sde
+    - swe
+    - forward deployed
+    - nlp
+    - computer vision
+    - deep learning
+    - research engineer
+    - research scientist
+    - platform engineer
+    - backend engineer
+    - full stack engineer
+    - fullstack engineer
+    - gen ai
+    - generative ai
+    - llm
+    - mlops
+
+  excluded:
+    - senior
+    - "sr."
+    - " sr "
+    - "sr "
+    - staff
+    - principal
+    - director
+    - manager
+    - vice president
+    - " vp "
+    - head of
+    - "lead "
+    - " lead"
+    - intern
+    - internship
+    - co-op
+    - coop
+    - distinguished
+    - fellow
+    - student
+
+  # Phrases in a job description that indicate a senior role
+  senior_phrases:
+    - "5+ years"
+    - "6+ years"
+    - "7+ years"
+    - "8+ years"
+    - senior engineer
+    - senior developer
+    - senior scientist
+    - lead engineer
+    - staff engineer
+    - principal engineer
+
+# ── experience ────────────────────────────────────────────────────────────────
+experience:
+  max_years: 5
+  phd_patterns:
+    - "ph.d"
+    - phd
+    - doctorate
+    - doctoral degree
+
+# ── companies ─────────────────────────────────────────────────────────────────
+companies:
+  blocklist:
+    - mercor
+    - dataannotation
+    - data annotation
+    - outlier
+    - appen
+    - remotasks
+    - lionbridge
+    - telus international
+    - taskus
+    - clickworker
+    - alignerr
+    - scale ai
+    - jobs ai
+    - great value hiring
+    - turing
+
+  tier1:
+    - google
+    - deepmind
+    - google deepmind
+    - meta
+    - apple
+    - amazon
+    - aws
+    - microsoft
+    - netflix
+    - openai
+    - anthropic
+    - nvidia
+    - databricks
+    - hugging face
+    - cohere
+    - stability ai
+
+  tier2:
+    - stripe
+    - shopify
+    - uber
+    - airbnb
+    - lyft
+    - twitter
+    - x corp
+    - linkedin
+    - salesforce
+    - twilio
+    - datadog
+    - snowflake
+    - palantir
+    - confluent
+    - elastic
+    - mongodb
+    - cloudflare
+    - figma
+    - notion
+    - asana
+    - zendesk
+    - okta
+    - pagerduty
+    - hashicorp
+    - wealthsimple
+    - rbc
+    - td bank
+    - bmo
+    - scotiabank
+    - cibc
+    - desjardins
+    - rogers
+    - telus
+    - bell
+    - cgi
+    - sap
+    - servicenow
+    - intuit
+    - autodesk
+    - hootsuite
+    - d2l
+    - wish
+    # Southeast Asia / China tech companies
+    - grab
+    - sea limited
+    - shopee
+    - bytedance
+    - tencent
+    - alibaba
+    - baidu
+    - didi
+    - meituan
+    - govtech
+    - singtel
+    - dbs
+    - ocbc
+
+# ── recency ───────────────────────────────────────────────────────────────────
+recency:
+  crawler_hours: 24
+  email_hours: 120
+  linkedin_time_range: r86400   # r86400=24h, r604800=7d, r2592000=30d
+
+# ── scoring ───────────────────────────────────────────────────────────────────
+scoring:
+  weights:
+    title: 30
+    company: 25
+    location: 20
+    recency: 15
+    keywords: 10
+
+  recency_scores:
+    6h: 15
+    12h: 12
+    24h: 8
+    older: 3
+
+  # Location fallback scores (when no score_tier matches)
+  location_fallback:
+    remote: 15    # remote with no specific region
+    us_only: 25
+    unknown: 3
+
+  keywords:
+    - llm
+    - large language model
+    - rag
+    - retrieval
+    - agent
+    - transformer
+    - pytorch
+    - fine-tun
+    - embedding
+    - vector
+    - diffusion
+    - generative
+    - reinforcement learning
+
+# ── output ────────────────────────────────────────────────────────────────────
+output:
+  top_n: 50

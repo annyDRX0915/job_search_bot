@@ -112,11 +112,12 @@ Your normal Chrome (opened from Dock/Spotlight) is completely unaffected — bot
 - `donotreply@match.indeed.com` — Indeed single job match emails
 - `noreply@glassdoor.com` — Glassdoor job alerts
 
-All three crawlers apply the same filters:
+All three crawlers apply the same filters — all defined in **`filters.yaml`** (edit there, no Python changes needed):
 - Title must match ML / AI / SWE / data roles
 - Entry-level only — no senior, staff, principal, director, manager, VP, lead
 - No 5+ years experience or PhD requirements (checked in description when available)
 - Company not in blocklist (Mercor, DataAnnotation, Outlier, Appen, Scale AI, etc.)
+- Location: Canada, USA, Singapore, Malaysia, China, or remote
 
 ### Ranker (`rank/ranker.py`)
 
@@ -124,9 +125,9 @@ Merges all three job sheets, removes already-applied jobs, dedupes by `job_key` 
 
 | Signal | Max pts | Logic |
 |---|---|---|
-| Title match | 35 | ML/AI engineer > data scientist > SWE |
-| Company tier | 25 | Tier 1 (Google/OpenAI/Anthropic) > Tier 2 (Stripe/Shopify) > other |
-| Location | 20 | Canada city/province > remote > US-only |
+| Title match | 30 | ML/AI engineer > data scientist > SWE |
+| Company tier | 25 | Tier 1 (Google/OpenAI/Anthropic) > Tier 2 (Stripe/Shopify/Grab) > other |
+| Location | 20 | Canada (30) > Singapore/USA (25) > Malaysia (20) > China (18) > remote (15) |
 | Recency | 15 | <6h > <12h > <24h > older |
 | Description keywords | 10 | LLM, RAG, PyTorch, agents, transformers, etc. |
 
@@ -151,9 +152,11 @@ All scripts fall back to local CSVs if `SPREADSHEET_ID` is not set.
 ## Files
 
 ```
+filters.yaml               # all job search filters in one place (locations, titles, companies, scoring)
 companies.yaml             # Greenhouse tokens + Lever handles to crawl
 apply/profile.yaml         # your info, work auth, resume path, Q&A answers
 scripts/gmail_auth.py      # one-time Gmail OAuth2 setup → prints GMAIL_REFRESH_TOKEN
+utils/filters.py           # loads filters.yaml — imported by all crawlers and ranker
 utils/gsheets.py           # Google Sheets helper (read_sheet / write_sheet / append_rows)
 ```
 
