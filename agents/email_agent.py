@@ -96,6 +96,7 @@ def _caldav_calendar():
             url="https://caldav.icloud.com",
             username=username,
             password=password,
+            timeout=15,
         )
         calendars = client.principal().calendars()
         if not calendars:
@@ -145,28 +146,33 @@ def _create_apple_event(
     description: str = "",
 ) -> str | None:
     """Create an event in iCloud Calendar. Returns the event UID or None on failure."""
-    try:
-        from icalendar import Calendar, Event
+    from icalendar import Calendar, Event
 
-        cal = Calendar()
-        cal.add("prodid", "-//job-search-bot//EN")
-        cal.add("version", "2.0")
+    cal = Calendar()
+    cal.add("prodid", "-//job-search-bot//EN")
+    cal.add("version", "2.0")
 
-        event = Event()
-        event.add("summary", title)
-        event.add("dtstart", start_dt)
-        event.add("dtend", start_dt + timedelta(minutes=duration_minutes))
-        if description:
-            event.add("description", description)
-        event_uid = str(uuid.uuid4())
-        event.add("uid", event_uid)
-        cal.add_component(event)
+    event = Event()
+    event.add("summary", title)
+    event.add("dtstart", start_dt)
+    event.add("dtend", start_dt + timedelta(minutes=duration_minutes))
+    if description:
+        event.add("description", description)
+    event_uid = str(uuid.uuid4())
+    event.add("uid", event_uid)
+    cal.add_component(event)
+    ical_data = cal.to_ical().decode()
 
-        calendar.add_event(cal.to_ical().decode())
-        return event_uid
-    except Exception as e:
-        print(f"  Calendar event creation failed: {e}")
-        return None
+    for attempt in range(2):
+        try:
+            calendar.add_event(ical_data)
+            return event_uid
+        except Exception as e:
+            if attempt == 0:
+                print(f"  Calendar write failed (retrying): {e}")
+            else:
+                print(f"  Calendar event creation failed after retry: {e}")
+    return None
 
 
 # ── email helpers ─────────────────────────────────────────────────────────────
@@ -251,7 +257,7 @@ def fetch_all_emails(service) -> list[dict]:
     """Fetch metadata for all emails from last 24h (handles pagination)."""
     msg_ids, page_token = [], None
     while True:
-        params = {"userId": "me", "q": "newer_than:1d", "maxResults": 500}
+        params = {"userId": "me", "q": "newer_than:7d", "maxResults": 500}
         if page_token:
             params["pageToken"] = page_token
         resp = service.users().messages().list(**params).execute()
