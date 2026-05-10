@@ -37,10 +37,10 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
       `https://docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit`
 
 ### GitHub Secrets (Settings → Secrets → Actions)
-- [ ] `SPREADSHEET_ID` — the ID copied above
-- [ ] `GOOGLE_SERVICE_ACCOUNT_JSON` — paste the full contents of the downloaded JSON key file
-- [ ] `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` — for email crawler (Phase 4)
-- [ ] `DISCORD_WEBHOOK_URL` — for Discord notifications (Phase 4)
+- [x] `SPREADSHEET_ID` — the ID copied above
+- [x] `GOOGLE_SERVICE_ACCOUNT_JSON` — paste the full contents of the downloaded JSON key file
+- [x] `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` — for email crawler (Phase 4)
+- [x] `DISCORD_WEBHOOK_URL` — for Discord notifications (Phase 4)
 
 ### Local `.env`
 - [x] Add `SPREADSHEET_ID=...`
@@ -57,7 +57,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
   - [x] `append_rows(tab: str, rows: list[dict])`
 - [x] Auth: reads `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_SERVICE_ACCOUNT_JSON_PATH`
 - [x] If `SPREADSHEET_ID` not set → raise a clear error
-- [ ] Add `upsert_rows(tab: str, key_col: str, rows: list[dict])` — update row in-place by key, append if not found (needed by email agent to update stage columns)
+- [x] Add `upsert_rows(tab: str, key_col: str, rows: list[dict])` — superseded: email agent uses read → update in-memory → write_sheet instead
 
 ---
 
@@ -80,7 +80,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 - [x] `main()`: writes `ranked_jobs` sheet (CSV fallback)
 - [x] AI re-ranking via OpenAI `gpt-4o-mini` after rule-based pre-filter
 - [x] `job_key` used for deduplication
-- [ ] `load_applied()`: handle new schema — job is "seen" if any row exists; handle rows missing `interviewed`/`rejected` columns gracefully (old CSV)
+- [x] `load_applied()`: handle new schema — job is "seen" if any row exists; handle rows missing `interviewed`/`rejected` columns gracefully (old CSV)
 
 ### `apply/applicator.py`
 - [x] `load_jobs()`: reads `ranked_jobs` sheet (CSV fallback)
@@ -88,7 +88,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 - [x] `log_result()`: appends to `applied_log` sheet (CSV fallback)
 - [x] `job_key` stored in log and checked for skip
 - [x] `LOG_FIELDS` updated to include `interviewed` and `rejected` columns (empty on new applications)
-- [ ] `load_applied()`: skip job if row exists with any non-empty value in `status`, `interviewed`, or `rejected` (handle old CSV rows without these columns)
+- [x] `load_applied()`: skip job if row exists with any non-empty value in `status`, `interviewed`, or `rejected` (handle old CSV rows without these columns)
 
 ---
 
@@ -102,7 +102,7 @@ All CSV state moves to a single Google Spreadsheet with one tab per file:
 - [x] Auth with Gmail API using refresh token
 - [x] Fetch emails from last 24h from `jobalerts-noreply@linkedin.com` and `alert@indeed.com`
 - [x] Parse job listings from HTML email body (title, company, location, url)
-- [ ] Flag "important" emails (subject contains: interview, invitation, offer, next steps, assessment)
+- [x] Flag "important" emails — handled by `email_agent.py` AI triage instead
 - [x] Write parsed jobs → `write_sheet("email_jobs", df)`
 
 ### Applied log schema (`applied_log` sheet) ✅
@@ -149,11 +149,11 @@ Three-pass pipeline over **all** emails from last 24h:
 - [ ] Send important email summaries to Discord (AI summary per email)
 
 ### GitHub Actions workflow (`.github/workflows/daily_job_pipeline.yml`)
-- [ ] Cron: `0 9 * * *` (9am UTC = 5am ET)
-- [ ] Steps: checkout → install deps → run `crawler.py` → run `crawler_email.py` → run `ranker.py` → run `notifier.py`
-- [ ] Load all secrets as env vars
-- [ ] Note: `crawler_linkedin.py` runs locally only — writes to `linkedin_jobs` sheet
-- [ ] Note: applicator is NOT automated (requires interactive browser + human confirmation)
+- [x] Cron: runs twice daily at 9am and 12pm ET
+- [x] Steps: checkout → install deps → run `crawler.py` → run `crawler_email.py` → run `ranker.py` → run `email_agent.py`
+- [x] Load all secrets as env vars
+- [x] Note: `crawler_linkedin.py` runs locally only — writes to `linkedin_jobs` sheet
+- [x] Note: applicator is NOT automated (requires interactive browser + human confirmation)
 
 ---
 
@@ -164,14 +164,14 @@ Three-pass pipeline over **all** emails from last 24h:
 - [x] `crawler/crawler_linkedin.py` locally — confirm `linkedin_jobs` tab populates
 - [x] `rank/ranker.py` locally — confirm `ranked_jobs` tab populates, `applied_log` read correctly
 - [x] `apply/applicator.py` locally on one job — confirm `applied_log` tab gets a new row
-- [ ] `scripts/gmail_auth.py` locally — confirm refresh token works
-- [ ] `crawler/crawler_email.py` locally — confirm `email_jobs` tab populates
-- [ ] `utils/gsheets.py` `upsert_rows()` — confirm in-place update and insert-if-missing both work
-- [ ] `apply/applicator.py` locally — confirm new row in `applied_log` has `interviewed` and `rejected` columns (empty)
+- [x] `scripts/gmail_auth.py` locally — confirm refresh token works
+- [x] `crawler/crawler_email.py` locally — confirm `email_jobs` tab populates
+- [x] `utils/gsheets.py` `upsert_rows()` — superseded, not needed
+- [x] `apply/applicator.py` locally — confirm new row in `applied_log` has `interviewed` and `rejected` columns (empty)
 - [x] `agents/email_agent.py` locally — confirm `interviewed`/`rejected` columns update correctly on matched rows
 - [x] `agents/email_agent.py` locally — confirm Discord digest arrives with correct sections
 - [x] `agents/spam_senders.json` — confirm newly flagged senders are appended after a run
-- [ ] `notify/notifier.py` locally — confirm Discord message arrives
+- [x] `notify/notifier.py` — superseded: Discord digest handled directly by `email_agent.py`
 - [x] Push → trigger GitHub Actions manually → confirm full pipeline runs in cloud
 
 ---
@@ -185,6 +185,53 @@ _Fill in after completion_
 - [ ] Discord digest looks good (top 10 jobs, clean formatting)
 - [ ] Important email summaries are useful
 - [ ] CSV fallback still works locally without `SPREADSHEET_ID` set
+
+---
+
+## Phase 8 — Email Memory, De-duplication & Apple Calendar
+
+### New file: `agents/email_store.py` (Google Sheets-backed memory)
+- [ ] `load_seen_ids()` → set of already-processed Gmail message IDs from `email_memory` sheet
+- [ ] `get_company_history(company, n=5)` → recent records for RAG context injection
+- [ ] `save_records(records)` → append new processed emails to `email_memory` sheet
+- [ ] Schema: `id | processed_at | category | company | title | summary | action | calendar_event_id | event_datetime`
+- [ ] Add `email_memory` tab to architecture table in README
+
+### De-duplication
+- [ ] In `email_agent.py` `main()`: load seen IDs at startup, filter before any API calls
+- [ ] Verify: running agent twice in 24h doesn't double-post to Discord
+
+### RAG context injection
+- [ ] In `summarize_email()`: inject `get_company_history()` results into prompt for `interview`/`offer` emails
+- [ ] Example: *"Previous emails from Stripe: rejection received 2026-04-20"*
+
+### Extended summarize — event extraction
+- [ ] Add event fields to `summarize_email()` AI prompt for `interview` + `important` (assessments):
+  - `event_type`: `"interview"` | `"assessment_deadline"` | `null`
+  - `event_datetime`: ISO8601 or `null`
+  - `event_duration_minutes`: integer (default 60)
+  - `event_title`: display string for calendar
+- [ ] Handle parse failures gracefully: `null` → skip calendar, note in Discord message
+
+### Apple Calendar (iCloud CalDAV)
+- [ ] Add `caldav` + `icalendar` to dependencies
+- [ ] Add `ICLOUD_USERNAME` + `ICLOUD_APP_PASSWORD` to `.env` and GitHub Secrets
+- [ ] Add `assessment_reminder_hours: 24` to `filters.yaml`
+- [ ] `_caldav_calendar()` helper — connects to `caldav.icloud.com` with app password
+- [ ] `_create_apple_event(cal, title, start_dt, duration_min, description)` → returns UID
+- [ ] Interview emails: event at `event_datetime`, 60 min
+- [ ] Assessment deadline emails: event at `deadline − assessment_reminder_hours`
+- [ ] Idempotent: skip if `calendar_event_id` already set in store
+
+### Discord updates
+- [ ] Interview items: show `📅 Added to calendar` or `⚠️ No time found`
+- [ ] Assessment items: show `📅 Reminder set for [date]`
+
+### Testing
+- [ ] Run agent twice — confirm second run posts nothing new to Discord
+- [ ] Send test interview email to self — confirm event appears in Apple Calendar
+- [ ] Send test assessment email — confirm event placed 24h before deadline
+- [ ] Check `email_memory` sheet has correct records after run
 
 ---
 

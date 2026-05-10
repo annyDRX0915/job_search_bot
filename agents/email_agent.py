@@ -1,6 +1,7 @@
 """
 Email agent — reads all last-24h Gmail, triages with AI, summarizes actionable
-emails, updates applied_log stage columns, and posts a digest to Discord.
+emails, updates applied_log stage columns, creates Apple Calendar events for
+interviews/assessments, and posts a digest to Discord.
 
 Usage:
     .venv/bin/python agents/email_agent.py
@@ -11,8 +12,9 @@ import json
 import os
 import re
 import sys
+import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -29,6 +31,10 @@ _USE_SHEETS = bool(os.getenv("SPREADSHEET_ID"))
 if _USE_SHEETS:
     from utils.gsheets import read_sheet, write_sheet
 
+from agents.email_store import (
+    is_seen, get_company_history, save_records, extract_company_hint,
+)
+
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 SPAM_FILE = Path(__file__).parent / "spam_senders.json"
 
@@ -44,6 +50,9 @@ JOB_ALERT_SENDERS = {
 SUMMARIZE_CATS = {"interview", "rejection", "offer", "important", "job_application"}
 UPDATE_LOG_CATS = {"interview", "rejection"}
 FILTER_CATS    = {"spam", "newsletter", "notification", "job_alert"}
+
+# Categories where we attempt calendar event creation
+CALENDAR_CATS = {"interview", "important"}
 
 
 # ── clients ───────────────────────────────────────────────────────────────────
@@ -68,6 +77,85 @@ def _oai() -> OpenAI:
     if not key:
         raise SystemExit("OPENAI_API_KEY not set in .env")
     return OpenAI(api_key=key)
+
+
+# ── Apple Calendar (iCloud CalDAV) ────────────────────────────────────────────
+
+def _caldav_calendar():
+    """Connect to iCloud CalDAV and return the primary calendar, or None on failure."""
+    username = os.getenv("ICLOUD_USERNAME")
+    password = os.getenv("ICLOUD_APP_PASSWORD")
+    if not username or not password:
+        print("  ICLOUD_USERNAME / ICLOUD_APP_PASSWORD not set — skipping calendar")
+        return None
+    try:
+        import caldav
+        client = caldav.DAVClient(
+            url="https://caldav.icloud.com",
+            username=username,
+            password=password,
+        )
+        calendars = client.principal().calendars()
+        if not calendars:
+            print("  No calendars found in iCloud account")
+            return None
+        return calendars[0]
+    except Exception as e:
+        print(f"  iCloud CalDAV connect failed: {e}")
+        return None
+
+
+def _parse_event_dt(dt_str: str) -> datetime | None:
+    """Parse an ISO8601 string returned by the AI into a timezone-aware datetime."""
+    if not dt_str:
+        return None
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d",
+    ):
+        try:
+            dt = datetime.strptime(dt_str.strip(), fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            continue
+    return None
+
+
+def _create_apple_event(
+    calendar,
+    title: str,
+    start_dt: datetime,
+    duration_minutes: int = 60,
+    description: str = "",
+) -> str | None:
+    """Create an event in iCloud Calendar. Returns the event UID or None on failure."""
+    try:
+        from icalendar import Calendar, Event
+
+        cal = Calendar()
+        cal.add("prodid", "-//job-search-bot//EN")
+        cal.add("version", "2.0")
+
+        event = Event()
+        event.add("summary", title)
+        event.add("dtstart", start_dt)
+        event.add("dtend", start_dt + timedelta(minutes=duration_minutes))
+        if description:
+            event.add("description", description)
+        event_uid = str(uuid.uuid4())
+        event.add("uid", event_uid)
+        cal.add_component(event)
+
+        calendar.add_event(cal.to_ical().decode())
+        return event_uid
+    except Exception as e:
+        print(f"  Calendar event creation failed: {e}")
+        return None
 
 
 # ── email helpers ─────────────────────────────────────────────────────────────
@@ -152,7 +240,6 @@ def _load_spam_config() -> dict:
 
 
 def _is_job_alert(sender: str) -> bool:
-    """True if this sender is already handled by crawler_email.py."""
     s = sender.lower()
     return any(addr in s for addr in JOB_ALERT_SENDERS)
 
@@ -173,7 +260,6 @@ def _is_static_spam(sender: str, subject: str, config: dict) -> bool:
 
 
 def _learn_spam_senders(senders: list[str], config: dict) -> None:
-    """Append newly AI-flagged sender addresses to spam_senders.json."""
     existing = set(config.get("learned_senders", []))
     added = []
     for sender in senders:
@@ -231,7 +317,6 @@ def _triage_batch(emails: list[dict]) -> dict[str, str]:
         data = json.loads(resp.choices[0].message.content)
         return {r["id"]: r["category"] for r in data.get("results", [])}
     except json.JSONDecodeError:
-        # Response was truncated — split batch and retry
         if len(emails) > 5:
             mid = len(emails) // 2
             result = _triage_batch(emails[:mid])
@@ -256,12 +341,34 @@ def triage_emails(emails: list[dict]) -> dict[str, str]:
 
 # ── AI summarize ──────────────────────────────────────────────────────────────
 
-def summarize_email(email: dict, body_text: str) -> dict:
+def summarize_email(email: dict, body_text: str, company_history: list[dict] | None = None) -> dict:
+    category = email.get("category", "")
+    needs_event = category in CALENDAR_CATS
+
+    event_schema = ""
+    if needs_event:
+        event_schema = (
+            ', "event_type": "interview | assessment_deadline | null"'
+            ', "event_datetime": "ISO8601 datetime string or null — extract from email body"'
+            ', "event_duration_minutes": 60'
+            ', "event_title": "short display title for calendar e.g. Interview @ Stripe"'
+        )
+
+    history_block = ""
+    if company_history:
+        lines = [
+            f"- {r.get('category', '?')} on {str(r.get('processed_at', ''))[:10]}: {str(r.get('summary', ''))[:100]}"
+            for r in company_history
+        ]
+        history_block = "\n\nPrevious emails from this company:\n" + "\n".join(lines)
+
     prompt = (
-        'Summarize this email. Return JSON:\n'
+        "Summarize this email. Return JSON:\n"
         '{"summary": "1-2 sentence summary", "action": "recommended next step or empty string",'
-        ' "company": "company name if job-related else empty", "title": "job title if job-related else empty"}\n\n'
+        ' "company": "company name if job-related else empty", "title": "job title if job-related else empty"'
+        f"{event_schema}}}\n\n"
         f"Subject: {email['subject']}\nFrom: {email['sender']}\n\n{body_text[:3000]}"
+        f"{history_block}"
     )
     try:
         resp = _oai().chat.completions.create(
@@ -275,11 +382,16 @@ def summarize_email(email: dict, body_text: str) -> dict:
             "id": email["id"],
             "subject": email["subject"],
             "sender": email["sender"],
-            "category": email.get("category", ""),
+            "category": category,
             "summary": data.get("summary", ""),
             "action": data.get("action", ""),
             "company": data.get("company", ""),
             "title": data.get("title", ""),
+            "event_type": data.get("event_type") or "",
+            "event_datetime": data.get("event_datetime") or "",
+            "event_duration_minutes": int(data.get("event_duration_minutes") or 60),
+            "event_title": data.get("event_title") or "",
+            "calendar_event_id": "",
         }
     except Exception as e:
         print(f"  Summarize failed for '{email['subject'][:50]}': {e}")
@@ -287,11 +399,16 @@ def summarize_email(email: dict, body_text: str) -> dict:
             "id": email["id"],
             "subject": email["subject"],
             "sender": email["sender"],
-            "category": email.get("category", ""),
+            "category": category,
             "summary": email["snippet"],
             "action": "",
             "company": "",
             "title": "",
+            "event_type": "",
+            "event_datetime": "",
+            "event_duration_minutes": 60,
+            "event_title": "",
+            "calendar_event_id": "",
         }
 
 
@@ -302,7 +419,6 @@ def _norm(s: str) -> str:
 
 
 def update_applied_log(summaries: list[dict]) -> None:
-    """Set interviewed/rejected on the best-matching applied_log row."""
     if not _USE_SHEETS:
         print("  Skipping applied_log update (SPREADSHEET_ID not set)")
         return
@@ -327,10 +443,8 @@ def update_applied_log(summaries: list[dict]) -> None:
         if not company:
             continue
 
-        # Company match: either string is a substring of the other
         mask = df["_cn"].apply(lambda c: bool(c and (company in c or c in company)))
 
-        # Narrow by title if available and it improves the match
         if title and mask.sum() > 1:
             title_mask = df["_tn"].apply(lambda t: bool(t and title[:12] in t))
             if (mask & title_mask).any():
@@ -340,7 +454,7 @@ def update_applied_log(summaries: list[dict]) -> None:
             print(f"  No match in applied_log for: {s.get('company')} — {s.get('title')}")
             continue
 
-        idx = df[mask].index[-1]  # most recent matching row
+        idx = df[mask].index[-1]
         if cat == "interview":
             df.at[idx, "interviewed"] = "interviewed"
             print(f"  Marked interviewed: {df.at[idx, 'company']} — {df.at[idx, 'title']}")
@@ -358,16 +472,15 @@ def update_applied_log(summaries: list[dict]) -> None:
 # ── Discord ───────────────────────────────────────────────────────────────────
 
 _SECTION_ORDER = [
-    ("interview",      "🔴 ACTION REQUIRED"),
-    ("offer",          "🟢 OFFERS"),
-    ("rejection",      "🟡 REJECTIONS"),
-    ("job_application","🔵 APPLICATION UPDATES"),
-    ("important",      "⚪ OTHER IMPORTANT"),
+    ("interview",       "🔴 ACTION REQUIRED"),
+    ("offer",           "🟢 OFFERS"),
+    ("rejection",       "🟡 REJECTIONS"),
+    ("job_application", "🔵 APPLICATION UPDATES"),
+    ("important",       "⚪ OTHER IMPORTANT"),
 ]
 
 
 def _build_digest(summaries: list[dict], filtered_by_cat: dict[str, int]) -> list[str]:
-    """Build Discord message(s), each ≤1900 chars."""
     today = datetime.now().strftime("%b %-d")
     lines = [f"📬 **Daily Email Digest — {today}**\n"]
 
@@ -389,6 +502,17 @@ def _build_digest(summaries: list[dict], filtered_by_cat: dict[str, int]) -> lis
             lines.append(f"• **{company}{title_part}** — {item['summary']}")
             if item.get("action"):
                 lines.append(f"  → {item['action']}")
+            # Calendar status for interview / assessment emails
+            if item.get("calendar_event_id"):
+                if item.get("event_type") == "assessment_deadline":
+                    from utils.filters import assessment_reminder_hours
+                    h = assessment_reminder_hours()
+                    dt_label = str(item.get("event_datetime", ""))[:10]
+                    lines.append(f"  📅 Reminder set {h}h before deadline ({dt_label})")
+                else:
+                    lines.append(f"  📅 Added to Apple Calendar")
+            elif cat in ("interview",) and item.get("event_type"):
+                lines.append(f"  ⚠️ No time found — add to calendar manually")
 
     total_filtered = sum(filtered_by_cat.values())
     if total_filtered:
@@ -397,7 +521,6 @@ def _build_digest(summaries: list[dict], filtered_by_cat: dict[str, int]) -> lis
         )
         lines.append(f"\n⚫ {total_filtered} filtered — {breakdown}")
 
-    # Chunk into ≤1900 char messages for Discord
     messages, current = [], ""
     for line in lines:
         candidate = current + line + "\n"
@@ -410,7 +533,6 @@ def _build_digest(summaries: list[dict], filtered_by_cat: dict[str, int]) -> lis
     if current.strip():
         messages.append(current.strip())
 
-    total_filtered = sum(filtered_by_cat.values())
     return messages or [f"📬 **Daily Email Digest — {today}**\n\n⚫ {total_filtered} emails filtered — nothing actionable today."]
 
 
@@ -443,26 +565,34 @@ def main():
         post_to_discord(["📬 No emails in the last 24h."])
         return
 
-    # 2. Pre-filter: job alert senders (already parsed by crawler_email.py) + static spam
+    # 2. Filter already-seen emails (de-duplication across runs)
+    unseen = [e for e in all_emails if not is_seen(e["id"])]
+    already_seen = len(all_emails) - len(unseen)
+    if already_seen:
+        print(f"  {already_seen} already processed in a previous run → {len(unseen)} new")
+    if not unseen:
+        post_to_discord(["📬 No new emails since last run."])
+        return
+
+    # 3. Pre-filter: job alert senders + static spam
     spam_config = _load_spam_config()
     survivors, filtered_by_cat = [], defaultdict(int)
-    for e in all_emails:
+    for e in unseen:
         if _is_job_alert(e["sender"]):
             filtered_by_cat["job_alerts (crawler)"] += 1
         elif _is_static_spam(e["sender"], e["subject"], spam_config):
             filtered_by_cat["static spam"] += 1
         else:
             survivors.append(e)
-    pre_filtered = len(all_emails) - len(survivors)
-    print(f"  {pre_filtered} removed by pre-filter → {len(survivors)} to AI triage")
+    print(f"  {len(unseen) - len(survivors)} removed by pre-filter → {len(survivors)} to AI triage")
 
-    # 3. AI triage
+    # 4. AI triage
     print("Triaging with AI...")
     categories = triage_emails(survivors)
     for e in survivors:
         e["category"] = categories.get(e["id"], "notification")
 
-    # 4. Learn new spam senders from AI-flagged emails
+    # 5. Learn new spam senders
     new_spam = [e["sender"] for e in survivors if e["category"] in ("spam", "newsletter")]
     if new_spam:
         _learn_spam_senders(new_spam, spam_config)
@@ -475,9 +605,15 @@ def main():
     ai_filtered = sum(filtered_by_cat[c] for c in FILTER_CATS)
     print(f"  {ai_filtered} filtered by AI → {len(actionable)} to summarize")
 
-    # 5. Fetch full body and summarize each actionable email
+    # 6. Connect to Apple Calendar once (shared across all events this run)
+    calendar = _caldav_calendar() if actionable else None
+
+    # 7. Fetch full body, inject RAG history, summarize, create calendar events
     summaries = []
     if actionable:
+        from utils.filters import assessment_reminder_hours
+        reminder_hours = assessment_reminder_hours()
+
         print(f"Summarizing {len(actionable)} emails...")
         for e in actionable:
             try:
@@ -487,27 +623,74 @@ def main():
                 body = _extract_text(full["payload"])[:3000]
             except Exception:
                 body = e["snippet"]
-            summary = summarize_email(e, body)
-            summaries.append(summary)
+
+            # RAG: look up company history from store before summarizing
+            company_hint = extract_company_hint(e["sender"], e["subject"], e["snippet"])
+            history = get_company_history(company_hint) if company_hint else []
+
+            summary = summarize_email(e, body, company_history=history or None)
+
             label = summary.get("company") or _sender_name(summary["sender"])
             print(f"  [{summary['category'].upper():14}] {label} — {summary['subject'][:50]}")
 
-    # 6. Update applied_log for interviews and rejections
-    _REJECTION_PHRASES = ("not move forward", "not selected", "not retained", "position no longer",
-                          "decided not to", "unsuccessful", "chosen another", "not a match",
-                          "not be moving", "not be proceeding")
+            # Calendar: create event for interview / assessment emails
+            if calendar and summary.get("event_type") and summary["event_type"] != "null":
+                raw_dt = summary.get("event_datetime", "")
+                event_dt = _parse_event_dt(raw_dt)
+                if event_dt:
+                    if summary["event_type"] == "assessment_deadline":
+                        event_dt = event_dt - timedelta(hours=reminder_hours)
+                    uid = _create_apple_event(
+                        calendar,
+                        title=summary.get("event_title") or f"Interview @ {label}",
+                        start_dt=event_dt,
+                        duration_minutes=summary.get("event_duration_minutes") or 60,
+                        description=summary.get("summary", ""),
+                    )
+                    if uid:
+                        summary["calendar_event_id"] = uid
+                        print(f"  📅 Calendar event created: {summary.get('event_title', label)}")
+                else:
+                    print(f"  ⚠️  Could not parse event datetime: {raw_dt!r}")
+
+            summaries.append(summary)
+
+    # 8. Reclassify important→rejection if summary contains rejection phrases
+    _REJECTION_PHRASES = (
+        "not move forward", "not selected", "not retained", "position no longer",
+        "decided not to", "unsuccessful", "chosen another", "not a match",
+        "not be moving", "not be proceeding",
+    )
     for s in summaries:
         if s["category"] == "important":
             text = (s.get("summary", "") + " " + s.get("subject", "")).lower()
             if any(p in text for p in _REJECTION_PHRASES):
                 s["category"] = "rejection"
 
+    # 9. Update applied_log for interviews and rejections
     log_updates = [s for s in summaries if s["category"] in UPDATE_LOG_CATS]
     if log_updates:
         print("Updating applied_log...")
         update_applied_log(log_updates)
 
-    # 7. Build and post Discord digest
+    # 10. Persist all processed emails to email_memory store
+    print("Saving to email_memory...")
+    save_records(summaries)
+    # Also record non-actionable survivors so they're not re-processed next run
+    non_actionable = [
+        {
+            "id": e["id"],
+            "category": e.get("category", "notification"),
+            "company": "",
+            "title": "",
+            "summary": e.get("snippet", "")[:120],
+            "action": "",
+        }
+        for e in survivors if e["category"] not in SUMMARIZE_CATS
+    ]
+    save_records(non_actionable)
+
+    # 11. Build and post Discord digest
     messages = _build_digest(summaries, filtered_by_cat)
     print("\n--- Discord Digest Preview ---")
     for m in messages:

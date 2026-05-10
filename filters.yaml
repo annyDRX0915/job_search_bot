@@ -315,3 +315,8 @@ scoring:
 # ── output ────────────────────────────────────────────────────────────────────
 output:
   top_n: 50
+
+# ── calendar ──────────────────────────────────────────────────────────────────
+calendar:
+  # Hours before an assessment deadline to place the reminder event
+  assessment_reminder_hours: 24

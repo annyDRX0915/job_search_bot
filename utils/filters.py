@@ -71,3 +71,6 @@ def scoring_keywords() -> list[str]:
 
 def top_n() -> int:
     return _load()["output"]["top_n"]
+
+def assessment_reminder_hours() -> int:
+    return _load().get("calendar", {}).get("assessment_reminder_hours", 24)

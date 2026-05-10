@@ -14,3 +14,4 @@ __pycache__/
 resume/
 apply/profile.yaml
 apply/past_exp.txt
+agents/email_store.jsonl
