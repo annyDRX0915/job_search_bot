@@ -392,9 +392,13 @@ def summarize_email(email: dict, body_text: str, company_history: list[dict] | N
 
     event_schema = ""
     if needs_event:
+        today = datetime.now().strftime("%Y-%m-%d")
         event_schema = (
             ', "event_type": "interview | assessment_deadline | null"'
-            ', "event_datetime": "ISO8601 datetime string or null — extract from email body"'
+            f', "event_datetime": "ISO8601 datetime string or null. Today is {today}.'
+            " For assessment deadlines: if a specific date is given use it, if relative ('5 days from now') calculate the actual date."
+            " If no time is given, use 23:00. Format: YYYY-MM-DDTHH:MM:00."
+            ' If truly no date or deadline can be found, use null."'
             ', "event_duration_minutes": 60'
             ', "event_title": "short display title for calendar e.g. Interview @ Stripe"'
         )
