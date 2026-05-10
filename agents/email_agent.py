@@ -164,14 +164,42 @@ def _header(headers: list, name: str) -> str:
     return next((h["value"] for h in headers if h["name"].lower() == name.lower()), "")
 
 
+_ATS_DOMAINS = {
+    "myworkday.com", "greenhouse.io", "lever.co", "taleo.net",
+    "icims.com", "smartrecruiters.com", "bamboohr.com", "jobvite.com",
+    "successfactors.com", "rippling.com", "jazz.co",
+}
+
+
+def _sender_for_ai(sender: str) -> str:
+    """Mask ATS platform emails so the AI doesn't use the local part as company name."""
+    m = re.search(r"<([^>]+)>", sender)
+    email = (m.group(1) if m else sender).strip().lower()
+    domain = email.split("@")[-1] if "@" in email else ""
+    if domain in _ATS_DOMAINS:
+        return f"[sent via {domain} — ignore sender for company name]"
+    return sender
+
+
 def _extract_text(payload: dict) -> str:
-    """Recursively extract readable text from email payload, preferring HTML."""
+    """Recursively extract readable text from email payload, preferring HTML.
+    Also appends img alt text so logo-only company names are captured."""
     mime = payload.get("mimeType", "")
     if mime == "text/html":
         data = payload.get("body", {}).get("data", "")
         if data:
             html = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-            return BeautifulSoup(html, "html.parser").get_text(separator=" ", strip=True)
+            soup = BeautifulSoup(html, "html.parser")
+            text = soup.get_text(separator=" ", strip=True)
+            # img alt attributes (company logos often only appear here)
+            alts = [
+                img["alt"].strip()
+                for img in soup.find_all("img", alt=True)
+                if len(img["alt"].strip()) > 2
+            ]
+            if alts:
+                text += " " + " ".join(alts)
+            return text
         return ""
     if mime == "text/plain":
         data = payload.get("body", {}).get("data", "")
@@ -370,7 +398,7 @@ def summarize_email(email: dict, body_text: str, company_history: list[dict] | N
         ' Look for the company name in the sign-off, logo, or anywhere in the body. Empty string if not job-related.",'
         ' "title": "job title if job-related else empty"'
         f"{event_schema}}}\n\n"
-        f"Subject: {email['subject']}\nFrom: {email['sender']}\n\n{body_text[:3000]}"
+        f"Subject: {email['subject']}\nFrom: {_sender_for_ai(email['sender'])}\n\n{body_text[:3000]}"
         f"{history_block}"
     )
     try:
