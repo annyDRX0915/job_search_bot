@@ -145,7 +145,7 @@ def _create_apple_event(
     duration_minutes: int = 60,
     description: str = "",
 ) -> str | None:
-    """Create an event in iCloud Calendar. Returns the event UID or None on failure."""
+    """Create an event via direct PUT to iCloud CalDAV (bypasses caldav library timeout issues)."""
     from icalendar import Calendar, Event
 
     cal = Calendar()
@@ -161,11 +161,24 @@ def _create_apple_event(
     event_uid = str(uuid.uuid4())
     event.add("uid", event_uid)
     cal.add_component(event)
-    ical_data = cal.to_ical().decode()
+    ical_bytes = cal.to_ical()
+
+    # Direct PUT bypasses caldav's HTTP layer which doesn't honour the timeout
+    calendar_url = str(calendar.url).rstrip("/")
+    event_url = f"{calendar_url}/{event_uid}.ics"
+    username = os.getenv("ICLOUD_USERNAME")
+    password = os.getenv("ICLOUD_APP_PASSWORD")
 
     for attempt in range(2):
         try:
-            calendar.add_event(ical_data)
+            resp = requests.put(
+                event_url,
+                data=ical_bytes,
+                auth=(username, password),
+                headers={"Content-Type": "text/calendar; charset=utf-8"},
+                timeout=15,
+            )
+            resp.raise_for_status()
             return event_uid
         except Exception as e:
             if attempt == 0:
@@ -415,8 +428,9 @@ def summarize_email(email: dict, body_text: str, company_history: list[dict] | N
         "Summarize this email. Return JSON:\n"
         '{"summary": "1-2 sentence summary", "action": "recommended next step or empty string",'
         ' "company": "hiring company name — extract from the email BODY, footer, logo text, or signature.'
-        " Do NOT use the sender email address or ATS domain (myworkday.com, greenhouse.io, lever.co, etc.)."
-        ' Look for the company name in the sign-off, logo, or anywhere in the body. Empty string if not job-related.",'
+        " Do NOT use: the sender email address, ATS platform domains (myworkday.com, greenhouse.io, lever.co, etc.),"
+        " or button/navigation text ('Go to Workday', 'View Application', 'Apply Now', 'Go to Greenhouse', etc.)."
+        ' Look for the actual employer name in the sign-off, logo, or body text. Empty string if not job-related.",'
         ' "title": "job title if job-related else empty"'
         f"{event_schema}}}\n\n"
         f"Subject: {email['subject']}\nFrom: {_sender_for_ai(email['sender'])}\n\n{body_text[:3000]}"
