@@ -29,6 +29,10 @@ GOOGLE_SERVICE_ACCOUNT_JSON_PATH=/path/to/service-account-key.json
 GMAIL_CLIENT_ID=...
 GMAIL_CLIENT_SECRET=...
 GMAIL_REFRESH_TOKEN=...   # generate once with: .venv/bin/python scripts/gmail_auth.py
+
+# Apple Calendar (iCloud CalDAV — email agent)
+ICLOUD_USERNAME=...           # your Apple ID email
+ICLOUD_APP_PASSWORD=...       # app-specific password from appleid.apple.com → Security
 ```
 
 Edit `apply/profile.yaml` with your personal info, work authorization, and resume path.
@@ -137,6 +141,21 @@ Top 50 rule-based results are then re-ranked by **GPT-4o-mini**, which considers
 
 Reads `Sheets:ranked_jobs` in rank order and auto-applies via Playwright. Detects ATS type (Greenhouse, Lever, LinkedIn Easy Apply, or generic fallback). Logs every attempt to `Sheets:applied_log` — already-applied jobs are skipped on future runs.
 
+### Email agent (`agents/email_agent.py`)
+
+Runs after the crawlers. Three-pass pipeline over all Gmail from the last 24h:
+
+1. **De-duplication** — loads `Sheets:email_memory` and skips any email already processed in a previous run, so running twice a day never double-posts to Discord
+2. **Static spam pre-filter** — drops job alert senders (already handled by `crawler_email.py`) and known spam domains (`agents/spam_senders.json`)
+3. **AI triage** — batch call to GPT-4o-mini categorises every surviving email: `interview`, `rejection`, `offer`, `job_application`, `important`, `spam`, `newsletter`, `notification`
+4. **AI summarise + event extraction** — for actionable emails, fetches the full body and asks the AI for a 1–2 sentence summary, recommended action, and (for interviews/assessments) the event datetime and title
+5. **Apple Calendar** — creates events in your `Job_Search` iCloud calendar via CalDAV. Interview emails → event at the scheduled time. Assessment deadline emails (Codility, HackerRank, etc.) → reminder event 24h before the deadline. Calendar name and reminder window are configurable in `filters.yaml`
+6. **Applied log update** — marks matching rows in `applied_log` as `interviewed` or `rejected`
+7. **Persistent memory** — saves every processed email to `Sheets:email_memory` (id, category, company, title, summary, calendar event ID). Used as RAG context on future runs: if the same company emails again, the AI sees the history
+8. **Discord digest** — posts a structured digest (ACTION REQUIRED → OFFERS → REJECTIONS → APPLICATION UPDATES → OTHER) with 📅/⚠️ calendar status on interview items
+
+New env vars required: `ICLOUD_USERNAME`, `ICLOUD_APP_PASSWORD` (app-specific password from appleid.apple.com).
+
 ## Google Sheets tabs
 
 | Tab | Written by | Read by |
@@ -145,16 +164,19 @@ Reads `Sheets:ranked_jobs` in rank order and auto-applies via Playwright. Detect
 | `linkedin_jobs` | `crawler_linkedin.py` | `ranker.py` |
 | `email_jobs` | `crawler_email.py` | `ranker.py` |
 | `ranked_jobs` | `ranker.py` | `applicator.py` |
-| `applied_log` | `applicator.py` | `ranker.py`, `applicator.py` |
+| `applied_log` | `applicator.py` | `ranker.py`, `applicator.py`, `email_agent.py` |
+| `email_memory` | `email_agent.py` | `email_agent.py` |
 
 All scripts fall back to local CSVs if `SPREADSHEET_ID` is not set.
 
 ## Files
 
 ```
-filters.yaml               # all job search filters in one place (locations, titles, companies, scoring)
+filters.yaml               # all job search filters in one place (locations, titles, companies, scoring, calendar)
 companies.yaml             # Greenhouse tokens + Lever handles to crawl
 apply/profile.yaml         # your info, work auth, resume path, Q&A answers
+agents/email_store.py      # Google Sheets-backed email memory (de-dup, RAG, calendar tracking)
+agents/spam_senders.json   # learned spam sender addresses (auto-updated each run)
 scripts/gmail_auth.py      # one-time Gmail OAuth2 setup → prints GMAIL_REFRESH_TOKEN
 utils/filters.py           # loads filters.yaml — imported by all crawlers and ranker
 utils/gsheets.py           # Google Sheets helper (read_sheet / write_sheet / append_rows)

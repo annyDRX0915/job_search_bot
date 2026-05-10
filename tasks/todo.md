@@ -188,50 +188,52 @@ _Fill in after completion_
 
 ---
 
-## Phase 8 — Email Memory, De-duplication & Apple Calendar
+## Phase 8 — Email Memory, De-duplication & Apple Calendar ✅
 
 ### New file: `agents/email_store.py` (Google Sheets-backed memory)
-- [ ] `load_seen_ids()` → set of already-processed Gmail message IDs from `email_memory` sheet
-- [ ] `get_company_history(company, n=5)` → recent records for RAG context injection
-- [ ] `save_records(records)` → append new processed emails to `email_memory` sheet
-- [ ] Schema: `id | processed_at | category | company | title | summary | action | calendar_event_id | event_datetime`
-- [ ] Add `email_memory` tab to architecture table in README
+- [x] `load_seen_ids()` → set of already-processed Gmail message IDs from `email_memory` sheet
+- [x] `get_company_history(company, n=5)` → recent records for RAG context injection
+- [x] `save_records(records)` → append new processed emails to `email_memory` sheet
+- [x] Schema: `id | processed_at | category | company | title | summary | action | calendar_event_id | event_datetime`
+- [x] Add `email_memory` tab to architecture table in README
 
 ### De-duplication
-- [ ] In `email_agent.py` `main()`: load seen IDs at startup, filter before any API calls
-- [ ] Verify: running agent twice in 24h doesn't double-post to Discord
+- [x] In `email_agent.py` `main()`: load seen IDs at startup, filter before any API calls
+- [x] Verify: running agent twice in 24h doesn't double-post to Discord
 
 ### RAG context injection
-- [ ] In `summarize_email()`: inject `get_company_history()` results into prompt for `interview`/`offer` emails
-- [ ] Example: *"Previous emails from Stripe: rejection received 2026-04-20"*
+- [x] In `summarize_email()`: inject `get_company_history()` results into prompt for `interview`/`offer` emails
+- [x] Example: *"Previous emails from Stripe: rejection received 2026-04-20"*
 
 ### Extended summarize — event extraction
-- [ ] Add event fields to `summarize_email()` AI prompt for `interview` + `important` (assessments):
+- [x] Add event fields to `summarize_email()` AI prompt for `interview` + `important` (assessments):
   - `event_type`: `"interview"` | `"assessment_deadline"` | `null`
   - `event_datetime`: ISO8601 or `null`
   - `event_duration_minutes`: integer (default 60)
   - `event_title`: display string for calendar
-- [ ] Handle parse failures gracefully: `null` → skip calendar, note in Discord message
+- [x] Handle parse failures gracefully: `null` → skip calendar, note in Discord message
 
 ### Apple Calendar (iCloud CalDAV)
-- [ ] Add `caldav` + `icalendar` to dependencies
-- [ ] Add `ICLOUD_USERNAME` + `ICLOUD_APP_PASSWORD` to `.env` and GitHub Secrets
-- [ ] Add `assessment_reminder_hours: 24` to `filters.yaml`
-- [ ] `_caldav_calendar()` helper — connects to `caldav.icloud.com` with app password
-- [ ] `_create_apple_event(cal, title, start_dt, duration_min, description)` → returns UID
-- [ ] Interview emails: event at `event_datetime`, 60 min
-- [ ] Assessment deadline emails: event at `deadline − assessment_reminder_hours`
-- [ ] Idempotent: skip if `calendar_event_id` already set in store
+- [x] Add `caldav` + `icalendar` to dependencies
+- [x] Add `ICLOUD_USERNAME` + `ICLOUD_APP_PASSWORD` to `.env` and GitHub Secrets
+- [x] Add `assessment_reminder_hours: 24` and `calendar_name: Job_Search` to `filters.yaml`
+- [x] `_caldav_calendar()` helper — connects to `caldav.icloud.com`, finds calendar by name
+- [x] `_create_apple_event(cal, title, start_dt, duration_min, description)` → returns UID
+- [x] Interview emails: event at `event_datetime`, 60 min
+- [x] Assessment deadline emails: event at `deadline − assessment_reminder_hours`
+- [x] Idempotent: skip if `calendar_event_id` already set in store
+- [x] Fix: mask ATS sender domains (myworkday.com etc.) so AI extracts company from body
+- [x] Fix: capture img alt text for logo-only company names in HTML emails
 
 ### Discord updates
-- [ ] Interview items: show `📅 Added to calendar` or `⚠️ No time found`
-- [ ] Assessment items: show `📅 Reminder set for [date]`
+- [x] Interview items: show `📅 Added to calendar` or `⚠️ No time found`
+- [x] Assessment items: show `📅 Reminder set for [date]`
 
 ### Testing
-- [ ] Run agent twice — confirm second run posts nothing new to Discord
-- [ ] Send test interview email to self — confirm event appears in Apple Calendar
-- [ ] Send test assessment email — confirm event placed 24h before deadline
-- [ ] Check `email_memory` sheet has correct records after run
+- [x] Run agent twice — confirm second run posts nothing new to Discord
+- [x] Send test interview email to self — confirm event appears in Apple Calendar (Job_Search)
+- [x] Send test assessment email — confirm event placed 24h before deadline
+- [x] Check `email_memory` sheet has correct records after run
 
 ---
 
