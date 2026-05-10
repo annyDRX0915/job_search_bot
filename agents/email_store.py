@@ -103,9 +103,14 @@ def extract_company_hint(sender: str, subject: str, snippet: str = "") -> str:
     if m:
         domain = m.group(1)
         _generic = {
-            "gmail", "yahoo", "hotmail", "outlook", "greenhouse",
-            "lever", "workday", "indeed", "linkedin", "notify",
-            "noreply", "no-reply", "mail", "notifications",
+            "gmail", "yahoo", "hotmail", "outlook",
+            # ATS platforms — domain is the vendor, not the hiring company
+            "greenhouse", "lever", "myworkday", "workday", "taleo",
+            "icims", "smartrecruiters", "bamboohr", "jobvite", "jazz",
+            "successfactors", "rippling",
+            # generic sending infrastructure
+            "indeed", "linkedin", "glassdoor",
+            "notify", "noreply", "no-reply", "mail", "notifications",
         }
         if domain not in _generic:
             return domain.replace("-", " ")

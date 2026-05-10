@@ -365,7 +365,10 @@ def summarize_email(email: dict, body_text: str, company_history: list[dict] | N
     prompt = (
         "Summarize this email. Return JSON:\n"
         '{"summary": "1-2 sentence summary", "action": "recommended next step or empty string",'
-        ' "company": "company name if job-related else empty", "title": "job title if job-related else empty"'
+        ' "company": "hiring company name — extract from the email BODY, footer, logo text, or signature.'
+        " Do NOT use the sender email address or ATS domain (myworkday.com, greenhouse.io, lever.co, etc.)."
+        ' Look for the company name in the sign-off, logo, or anywhere in the body. Empty string if not job-related.",'
+        ' "title": "job title if job-related else empty"'
         f"{event_schema}}}\n\n"
         f"Subject: {email['subject']}\nFrom: {email['sender']}\n\n{body_text[:3000]}"
         f"{history_block}"
