@@ -97,7 +97,7 @@ import time as _time
 
 
 def _recency_tag_to_dt(tag: str, base: datetime) -> datetime:
-    """Convert '6h', '1d', 'Just posted', 'Today' relative to base datetime."""
+    """Convert '6h', '1d', 'Just posted', 'Today', 'a day ago', '2 days ago' relative to base."""
     tag = tag.strip().lower()
     if tag in ("just posted", "today"):
         return base
@@ -105,6 +105,17 @@ def _recency_tag_to_dt(tag: str, base: datetime) -> datetime:
     if m:
         n, unit = int(m.group(1)), m.group(2)
         return base - (timedelta(days=n) if unit == 'd' else timedelta(hours=n))
+    m = re.search(r'(a|\d+\+?)\s+(day|days|week|weeks|month|months|year|years)\s+ago', tag)
+    if m:
+        qty_str, unit = m.group(1), m.group(2)
+        qty = 1 if qty_str == "a" else int(qty_str.rstrip("+"))
+        if "year" in unit:
+            return base - timedelta(days=qty * 365)
+        if "month" in unit:
+            return base - timedelta(days=qty * 30)
+        if "week" in unit:
+            return base - timedelta(weeks=qty)
+        return base - timedelta(days=qty)
     return base
 
 
@@ -359,8 +370,9 @@ def _enrich_descriptions(jobs: list[dict]) -> list[dict]:
 
 # ── shared junk patterns ──────────────────────────────────────────────────────
 
+# Junk phrases that can appear anywhere in the card text
 _JUNK_SUFFIXES = re.compile(
-    r'\s*(actively recruiting|easy apply|\d+\s*school alum(?:ni)?|be an early applicant)\s*',
+    r'\s*(?:actively recruiting|easily?\s+apply(?:ing)?|be an early applicant|\d+\s*school alum(?:ni)?|_\w[^\s]*)\s*',
     re.IGNORECASE,
 )
 # Salary: "$80K - $95K ( Employer Est. )" or "$22/hr" etc.
@@ -368,15 +380,18 @@ _SALARY = re.compile(
     r'\s*\$[\d,]+[Kk]?(?:[/\w]*)(?:\s*[-–]\s*\$[\d,]+[Kk]?(?:[/\w]*))?(?:\s*\([^)]*[Ee]st\.?[^)]*\))?',
     re.IGNORECASE,
 )
-# Trailing numeric rating like "4.3", "3.x"
-_RATING_SUFFIX = re.compile(r'\s*\d[\d.]*[a-z]?\s*$')
-# Recency tags: "1d", "6h", "Just posted", "Today"
-_RECENCY = re.compile(r'\s*(?:Just posted|Today|\d+[dh])\s*$', re.IGNORECASE)
+# Strip Indeed star rating and any tagline that follows (e.g. "Kruger Products 3.9 Cashmere®, Purex®...")
+_RATING_SUFFIX = re.compile(r'\s+\d[\d.]*\b.*$')
+# Recency tags: "1d", "6h", "Just posted", "Today", "a day ago", "2 days ago", "30+ days ago", "a year ago"
+_RECENCY = re.compile(
+    r'\s*(?:Just posted|Today|\d+[dh]|(?:a|\d+\+?)\s+(?:day|days|week|weeks|month|months|year|years)\s+ago|30\+\s*days?\s*ago)\s*$',
+    re.IGNORECASE,
+)
 # Parenthetical expressions "(CyberArk, SAAS)"
 _PARENS = re.compile(r'\([^)]*\)')
-# Generic button-like / footer link texts to skip
+# Generic button-like / footer link texts to skip entirely (as standalone anchor texts)
 _BUTTON_TEXT = re.compile(
-    r'^(apply|view|see|click|learn|find|browse|search|manage|update|login|sign in|unsubscribe|'
+    r'^(easily?\s+apply|apply|view|see|click|learn|find|browse|search|manage|update|login|sign in|unsubscribe|'
     r'get started|jobs near|more jobs|all jobs|set up|create|edit|terms|privacy|help|pause|'
     r'since |for last|this is a bad|report this|not interested|save job|dismiss|'
     r'cookie|contact us|accessibility|sitemap|copyright|indeed)\b',
@@ -385,6 +400,13 @@ _BUTTON_TEXT = re.compile(
 # Pay frequency text that leaks into location
 _PAY_FREQ = re.compile(
     r'\s+(?:a year|an hour|a week|a month|per hour|per year|hourly|annually)\b.*$',
+    re.IGNORECASE,
+)
+# Description-start markers — text after these is job description, not location
+_DESC_START = re.compile(
+    r'\b(?:in this role|we are|we\'re|about the role|you will|the role|membership|join us|'
+    r'our team|this position|we look|what you|as a |responsibilities|requirements|'
+    r'looking for a|looking for an)\b',
     re.IGNORECASE,
 )
 
@@ -529,19 +551,57 @@ def parse_indeed_alert_jobs(html: str, email_dt: datetime | None = None) -> list
             if len(text) <= len(title):
                 continue
             rest = text[len(title):].strip() if text.startswith(title) else text
+            # Strip salary, junk CTAs, then detect recency before removing it
             rest = _SALARY.sub("", rest).strip()
+            rest = _JUNK_SUFFIXES.sub(" ", rest).strip()
             recency_m = _RECENCY.search(rest)
             if recency_m:
                 posted_at = _recency_tag_to_dt(recency_m.group(), base)
             rest = _RECENCY.sub("", rest).strip()
-            rest = _JUNK_SUFFIXES.sub("", rest).strip()
+            # Truncate at description start
+            rest = _DESC_START.split(rest, maxsplit=1)[0].strip()
+
             if " - " in rest:
+                # "Company 3.9 Tagline - Location" format
                 company_part, _, loc = rest.partition(" - ")
                 company = _RATING_SUFFIX.sub("", company_part).strip()
                 loc = _JUNK_SUFFIXES.sub("", loc).strip().split("$")[0].strip()
                 location = _PAY_FREQ.sub("", loc).strip()
-            elif rest:
-                company = _RATING_SUFFIX.sub("", rest).strip()
+            else:
+                # "Company 3.5 Location" format (Indeed card — rating is the separator)
+                rating_m = re.search(r'\s+\d[\d.]*\s+', rest)
+                if rating_m:
+                    company = rest[:rating_m.start()].strip()
+                    loc = rest[rating_m.end():].strip()
+                    loc = _SALARY.sub("", loc).strip()
+                    location = _PAY_FREQ.sub("", loc).strip().rstrip(",").strip()
+                elif rest:
+                    # No rating — split at first location-like City, Province pattern
+                    # First try specific cities (reliable); then country/province (only if company is long enough)
+                    loc_m = re.search(
+                        r'\b(?:Aurora|Toronto|Vancouver|Montreal|Ottawa|Calgary|Mississauga|'
+                        r'Hamilton|Waterloo|Kitchener|Brampton|Markham|Burnaby|Surrey|Edmonton|'
+                        r'Winnipeg|Halifax|London|Kingston|Barrie|Richmond Hill|Vaughan|Oakville|'
+                        r'Burlington|Oshawa|Guelph|Cambridge|Sudbury|Thunder Bay|Remote)\b'
+                        r'(?:\s*,\s*(?:ON|BC|AB|QC|MB|SK|NS|NB|PE|NL|Canada))?',
+                        rest, re.IGNORECASE
+                    )
+                    if not loc_m:
+                        loc_m = re.search(
+                            r'\b(?:Canada|Ontario|British Columbia|Alberta|Quebec|Manitoba|Saskatchewan)\b',
+                            rest, re.IGNORECASE
+                        )
+                        if loc_m and loc_m.start() <= 8:
+                            loc_m = None  # too close to start — likely part of company name
+                    if loc_m and loc_m.start() > 2:
+                        company = rest[:loc_m.start()].strip().rstrip(",").strip()
+                        loc_raw = rest[loc_m.start():]
+                        # Strip junk suffixes ("a year", "_This job is", etc.) from location too
+                        loc_raw = re.sub(r'\s+a\s+(?:year|month|week|day)\b.*$', '', loc_raw, flags=re.IGNORECASE)
+                        loc_raw = _JUNK_SUFFIXES.sub('', loc_raw)
+                        location = _PAY_FREQ.sub("", loc_raw).strip()
+                    else:
+                        company = _RATING_SUFFIX.sub("", rest).strip()
             break
 
         snippet = _email_snippet(first_anchor[url]) if url in first_anchor else ""

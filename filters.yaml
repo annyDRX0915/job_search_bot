@@ -51,10 +51,10 @@ locations:
   # LinkedIn search targets (crawler_linkedin.py LOCATIONS list)
   linkedin_search:
     - Canada
+    - United States
     - Singapore
     - Malaysia
     - China
-    # - United States
 
   # Jobs in these locations are dropped by the ranker
   ineligible:
@@ -83,8 +83,12 @@ locations:
   score_tiers:
     - name: canada
       terms: [canada, toronto, vancouver, montreal, ottawa, calgary,
-              ontario, british columbia, alberta, quebec, waterloo]
-      score: 30
+              ontario, british columbia, alberta, quebec, waterloo,
+              mississauga, brampton, markham, vaughan, oakville, hamilton,
+              kitchener, london on, aurora on, barrie, kingston, richmond hill,
+              burnaby, surrey, edmonton, winnipeg, halifax, regina, saskatoon,
+              ", on", ", bc", ", ab", ", qc", ", mb", ", ns", ", sk"]
+      score: 40
     - name: singapore
       terms: [singapore]
       score: 25

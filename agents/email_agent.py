@@ -578,7 +578,13 @@ def _build_digest(summaries: list[dict], filtered_by_cat: dict[str, int]) -> lis
                 else:
                     lines.append(f"  📅 Added to Apple Calendar")
             elif cat in ("interview",) and item.get("event_type"):
-                lines.append(f"  ⚠️ No time found — add to calendar manually")
+                raw_dt = item.get("event_datetime", "")
+                if raw_dt:
+                    dt_label = raw_dt[:16].replace("T", " ")
+                    cal_title = item.get("event_title") or f"Interview @ {item.get('company', '?')}"
+                    lines.append(f"  ⚠️ Calendar write failed — add manually: **{cal_title}** {dt_label}")
+                else:
+                    lines.append(f"  ⚠️ No time found — add to calendar manually")
 
     total_filtered = sum(filtered_by_cat.values())
     if total_filtered:
@@ -699,12 +705,17 @@ def main():
             label = summary.get("company") or _sender_name(summary["sender"])
             print(f"  [{summary['category'].upper():14}] {label} — {summary['subject'][:50]}")
 
-            # Calendar: create event for interview / assessment emails
-            if calendar and summary.get("event_type") and summary["event_type"] != "null":
-                raw_dt = summary.get("event_datetime", "")
+            # Calendar: create event for interview / assessment emails.
+            # Fall back to creating an event whenever event_datetime is set,
+            # even if event_type came back null from the AI.
+            event_type = (summary.get("event_type") or "").strip().lower()
+            if event_type == "null":
+                event_type = ""
+            raw_dt = summary.get("event_datetime", "")
+            if calendar and (event_type or raw_dt):
                 event_dt = _parse_event_dt(raw_dt)
                 if event_dt:
-                    if summary["event_type"] == "assessment_deadline":
+                    if event_type == "assessment_deadline":
                         event_dt = event_dt - timedelta(hours=reminder_hours)
                     uid = _create_apple_event(
                         calendar,

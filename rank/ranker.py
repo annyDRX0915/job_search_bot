@@ -296,11 +296,15 @@ def ai_rerank(jobs: pd.DataFrame) -> pd.DataFrame:
 
 def load_jobs() -> pd.DataFrame:
     frames = []
-    keep = ["company", "title", "location", "url", "posted_at", "description", "job_key"]
+    keep = ["source", "company", "title", "location", "url", "posted_at", "description", "job_key"]
 
     def _add(df: pd.DataFrame, label: str):
         df = df.rename(columns=lambda c: c.lstrip("\ufeff"))
+        if "source" not in df.columns:
+            df = df.copy()
+            df["source"] = label
         cols = [c for c in keep if c in df.columns]
+        print(f"  Loaded {len(df)} jobs from {label}")
         frames.append(df[cols])
 
     if _USE_SHEETS:
@@ -364,7 +368,16 @@ def load_jobs() -> pd.DataFrame:
 
 
 def _norm_url(url: str) -> str:
-    return str(url).strip().rstrip("/").lower().split("?")[0]
+    """Normalize URL for dedup. Strip only UTM/tracking params, not job-ID params like ?jk=."""
+    from urllib.parse import urlparse, urlencode, parse_qs
+    u = str(url).strip().rstrip("/").lower()
+    parsed = urlparse(u)
+    # Drop known tracking-only params; keep params that identify the job
+    tracking = {"utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+                "refid", "trackingid", "ref", "trk", "position", "pagenum"}
+    qs = {k: v for k, v in parse_qs(parsed.query).items() if k not in tracking}
+    clean = parsed._replace(query=urlencode(qs, doseq=True))
+    return clean.geturl()
 
 def load_applied() -> tuple[set, set, set]:
     """Return (applied_urls, applied_company_titles, applied_job_keys) from the log."""
@@ -423,13 +436,18 @@ def main():
     jobs = score_jobs(jobs)
     jobs = jobs.sort_values("score", ascending=False).reset_index(drop=True)
 
+    if "source" in jobs.columns:
+        print("Jobs by source after filtering:")
+        for src, cnt in jobs["source"].value_counts().items():
+            print(f"  {src}: {cnt}")
+
     top = jobs.head(TOP_N)
     top = ai_rerank(top)
     top = top.reset_index(drop=True)
     top.insert(0, "rank", top.index + 1)
 
     # Save full ranked list (without description to keep it readable)
-    base_cols = ["rank", "score", "company", "title", "location", "salary", "posted_at", "url",
+    base_cols = ["rank", "score", "source", "company", "title", "location", "salary", "posted_at", "url",
                  "job_key", "score_title", "score_company", "score_location", "score_recency", "score_keywords"]
     ai_cols = [c for c in ["ai_score", "ai_reason"] if c in top.columns]
     out = top[base_cols + ai_cols]

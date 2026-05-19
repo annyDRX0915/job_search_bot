@@ -76,7 +76,14 @@ def load_jobs() -> list[dict]:
         return list(csv.DictReader(f))
 
 def _norm_url(url: str) -> str:
-    return url.strip().rstrip("/").lower().split("?")[0]
+    """Normalize URL: strip trailing slash + case, drop only tracking params (not job-ID params like ?jk=)."""
+    from urllib.parse import urlparse, urlencode, parse_qs
+    u = url.strip().rstrip("/").lower()
+    parsed = urlparse(u)
+    tracking = {"utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+                "refid", "trackingid", "ref", "trk", "position", "pagenum"}
+    qs = {k: v for k, v in parse_qs(parsed.query).items() if k not in tracking}
+    return parsed._replace(query=urlencode(qs, doseq=True)).geturl()
 
 def load_applied() -> tuple[set, set, set]:
     """Return (applied_urls, applied_company_titles, applied_job_keys) from the log."""
@@ -1223,19 +1230,22 @@ def main():
                 location = job.get("location", "")
                 ats = detect_ats(url)
                 print(f"[{i+1}/{len(pending)}] {company} — {title} ({ats})")
-                if ats in _MANUAL_ATS:
-                    # Navigate in real Chrome (user already logged in via CDP), pre-fill what we can
-                    status, notes = apply_manual(page, url, job, profile)
-                elif ats == "greenhouse":
-                    status, notes = apply_greenhouse(page, job, profile)
-                elif ats == "lever":
-                    status, notes = apply_lever(page, job, profile)
-                elif ats == "linkedin":
-                    status, notes = apply_linkedin(page, job, profile)
-                elif ats == "ashby":
-                    status, notes = apply_greenhouse(page, job, profile)
-                else:
-                    status, notes = apply_generic(page, job, profile)
+                try:
+                    if ats in _MANUAL_ATS:
+                        status, notes = apply_manual(page, url, job, profile)
+                    elif ats == "greenhouse":
+                        status, notes = apply_greenhouse(page, job, profile)
+                    elif ats == "lever":
+                        status, notes = apply_lever(page, job, profile)
+                    elif ats == "linkedin":
+                        status, notes = apply_linkedin(page, job, profile)
+                    elif ats == "ashby":
+                        status, notes = apply_greenhouse(page, job, profile)
+                    else:
+                        status, notes = apply_generic(page, job, profile)
+                except SystemExit:
+                    log_result(url, company, title, source, "skipped", "user quit", location)
+                    raise
                 print(f"  → {status}" + (f": {notes}" if notes else ""))
                 if status != "failed":
                     log_result(url, company, title, source, status, notes, location)
