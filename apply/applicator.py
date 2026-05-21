@@ -1225,7 +1225,11 @@ def main():
         try:
             for i, job in enumerate(pending):
                 if page.is_closed():
-                    page = context.new_page()
+                    try:
+                        page = context.new_page()
+                    except Exception:
+                        print("\nBrowser context closed — stopping.")
+                        break
                 url, company, title, source = job.get("url",""), job.get("company",""), job.get("title",""), job.get("source","")
                 location = job.get("location", "")
                 ats = detect_ats(url)
